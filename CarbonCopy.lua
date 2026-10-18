@@ -606,8 +606,13 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
-        -- provide syntax help
+        -- provide syntax help (GM only, it lists the GM ticket/config/logs commands)
         if commandArray[2] == "help" then
+            if player:GetGMRank() < Config.minGMRankForTickets then
+                chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                cc_resetVariables()
+                return false
+            end
             chatHandler:SendSysMessage("Syntax: .carboncopy $newCharacterName")
             chatHandler:SendSysMessage("Syntax: .carboncopy config")
             chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
@@ -653,6 +658,13 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         if ccSubCommand == "tickets" then
+            -- every tickets action (lookup / add / remove / syntax) is GM only
+            if player:GetGMRank() < Config.minGMRankForTickets then
+                chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                cc_resetVariables()
+                return false
+            end
+
             if commandArray[3] == nil then
                 chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
                 chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
