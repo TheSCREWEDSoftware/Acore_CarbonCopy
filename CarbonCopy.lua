@@ -837,9 +837,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 CharDBExecute('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), 0, Config.freeTickets, CC_STATUS_FREE_CONFIG_TICKET, "Free config ticket granted")
             end
-            chatHandler:SendSysMessage(cc_info(player, "TICKETS", oldTickets))
+            -- ticket cost list and map warning first, the most important lines last
+            -- (closest to the chat input): balance, how to use it, and whether this character can be copied
+            cc_sendTicketCosts(player, chatHandler)
+            if not cc_has_value(cc_maps, player:GetMapId()) then
+                chatHandler:SendSysMessage(cc_info(player, "WRONG_MAP"))
+            end
 
-            -- how to use it, and whether this character can be copied right now
+            chatHandler:SendSysMessage(cc_info(player, "TICKETS", oldTickets))
             chatHandler:SendSysMessage(cc_info(player, "USAGE"))
             local level = player:GetLevel()
             local cost = cc_ticketCostForLevel(level)
@@ -850,10 +855,6 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             else
                 chatHandler:SendSysMessage(cc_info(player, "ELIGIBLE", level, cost))
             end
-            if not cc_has_value(cc_maps, player:GetMapId()) then
-                chatHandler:SendSysMessage(cc_info(player, "WRONG_MAP"))
-            end
-            cc_sendTicketCosts(player, chatHandler)
 
             cc_resetVariables()
             return false
