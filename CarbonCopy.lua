@@ -1452,7 +1452,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         cc_resetVariables()
         return false
     elseif player ~= nil then
-        chatHandler:SendSysMessage("'CCACCOUNTTICKETS $accountName $amount' only works against SOAP / the console.")
+        -- CCACCOUNTTICKETS is SOAP / console only: stay silent for players, like .addcctickets
         return false
     else
         chatHandler:SendSysMessage("Syntax: CCACCOUNTTICKETS $accountName $amount")
