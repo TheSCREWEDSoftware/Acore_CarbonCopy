@@ -775,6 +775,20 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
+        -- console / SOAP: list the commands that work from here
+        if player == nil and (ccSubCommandConsole == "help" or ccSubCommandConsole == "--help") then
+            chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
+            chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
+            chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+            chatHandler:SendSysMessage("Syntax: .carboncopy config")
+            chatHandler:SendSysMessage("Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]")
+            chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
+            chatHandler:SendSysMessage("Syntax: CCACCOUNTTICKETS $accountName $amount")
+            chatHandler:SendSysMessage(".carboncopy $newCharacterName can only be run in game, from the character to copy.")
+            cc_resetVariables()
+            return false
+        end
+
         if player == nil then
             local reason = "This command can not be run from the console, but only from the character to copy."
             chatHandler:SendSysMessage(reason)
