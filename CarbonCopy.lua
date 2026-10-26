@@ -223,8 +223,9 @@ do
                     if mine[id] then overlap = true end
                 end
                 if overlap then
-                    PrintError("CarbonCopy: ticket balances exist for realms \""..other.."\", which overlaps this realm's Config.ticketRealms \""
-                        ..CC_TICKET_REALMS.."\". Worldservers that share tickets need exactly the same list.")
+                    PrintError("CarbonCopy: `"..Config.customDbName.."`.`"..cc_carboncopyTable.."`.`realm_ids` has ticket balances for realms \""
+                        ..other.."\", which overlaps this realm's Config.ticketRealms \""..CC_TICKET_REALMS.."\". Worldservers that share "
+                        .."tickets need exactly the same list: change Config.ticketRealms or update those rows.")
                 end
             end
         until not lists:NextRow()
