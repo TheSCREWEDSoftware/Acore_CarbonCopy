@@ -33,6 +33,12 @@ local cc_enableMailItemLog = Config.enableMailItemLog ~= false
 local cc_mailExpireDays = tonumber(Config.mailExpireDays) or 0
 local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
 
+local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
+
+-- Ban reasons used to lock a character during a copy / restore; only bans with these reasons are lifted by the script.
+local CC_BAN_REASON_COPY = "CarbonCopy"
+local CC_BAN_REASON_RESTORE = "CarbonCopy restore"
+
 -- "Never expires" = 2038-01-01. Kept below 2^31 so no signed 32-bit time math (core or client) can overflow it.
 local CC_MAIL_NEVER_EXPIRES = 2145916800
 local cc_unpack = table.unpack or unpack
@@ -647,6 +653,16 @@ local function cc_extendMailForItems(receiverGuid, itemGuids)
         ..'WHERE m.receiver = '..receiverGuid..' AND mi.item_guid IN ('..table.concat(itemGuids, ',')..');')
 end
 
+-- Lifts the temporary lock the script put on a character (never touches other bans).
+-- The core only checks character_banned.active at login, so this unlocks immediately.
+local function cc_liftCarbonCopyBan(characterGuid)
+    if characterGuid == nil or characterGuid == 0 then
+        return
+    end
+    CharDBQuery('UPDATE `character_banned` SET `active` = 0 WHERE `guid` = '..characterGuid..' AND `active` = 1 '
+        ..'AND `banreason` IN ('..cc_sqlQuote(CC_BAN_REASON_COPY)..', '..cc_sqlQuote(CC_BAN_REASON_RESTORE)..');')
+end
+
 -- SendMail commits asynchronously: true once every item is visible in mail_items.
 local function cc_mailItemsCommitted(itemGuids)
     if #itemGuids == 0 then
@@ -765,13 +781,16 @@ local function cc_notifyAdmin(adminGuid, text)
     end
 end
 
-local function cc_sendRestoreSyntax(chatHandler)
-    chatHandler:SendSysMessage("Syntax: .carboncopy restore $characterName                    (list mailed items and where they are now)")
-    chatHandler:SendSysMessage("Syntax: .carboncopy restore $characterName missing [copyId]   (re-send only items that no longer exist)")
-    chatHandler:SendSysMessage("Syntax: .carboncopy restore $characterName all [copyId]       (re-send every logged item)")
+-- reply can be a ChatHandler or a function(text)
+local function cc_sendRestoreSyntax(reply)
+    local send = type(reply) == "function" and reply or function(text) reply:SendSysMessage(text) end
+    send("Syntax: .carboncopy restore $characterName                         (list mailed items and where they are now)")
+    send("Syntax: .carboncopy restore $characterName missing [copyId] [kick]  (re-send only items that no longer exist)")
+    send("Syntax: .carboncopy restore $characterName all [copyId] [kick]      (re-send every logged item)")
+    send("        kick = kick the character if online and restore once it is saved and offline")
 end
 
--- Writes enchants/gems/suffix back onto the restored items, keeps the mail, logs the new items.
+-- Writes enchants/gems/suffix back onto the restored items, keeps the mail, logs the new items, unlocks the character.
 -- Runs a few seconds after SendMail so its transaction is committed; retries a few times if not yet.
 local function cc_finishRestore(job)
     local newGuids = {}
@@ -808,45 +827,97 @@ local function cc_finishRestore(job)
         end
     end
 
+    cc_liftCarbonCopyBan(job.targetGuid)
     cc_restoreBusy[job.targetGuid] = nil
-    local text = "CarbonCopy restore: "..#job.pairs.." item(s) mailed to "..job.targetName.." ("..job.mode..")."
-    cc_notifyAdmin(job.adminGuid, text)
+    cc_notifyAdmin(job.adminGuid, "CarbonCopy restore: "..#job.pairs.." item(s) mailed to "..job.targetName.." ("..job.mode.."). "
+        ..job.targetName.." can log in again.")
     cc_logAdmin(job.adminName, job.adminGuid, job.targetName, job.targetGuid, nil, CC_ACTION_GM_RESTORE, nil, nil,
-        CC_STATUS_SUCCESS, "Restored "..#job.pairs.." item(s), mode "..job.mode)
+        CC_STATUS_SUCCESS, "Restored "..#job.pairs.." item(s), mode "..job.mode..(job.kicked and ", kicked" or ""))
 end
 
--- .carboncopy restore $name [missing|all|list] [copyId]   (GM or console)
-local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx)
-    local adminName = player and player:GetName() or "console"
-    local adminGuid = player and tonumber(tostring(player:GetGUID())) or nil
+-- .carboncopy restore $name [list|missing|all] [copyId] [kick]   (GM or console)
+-- reply: ChatHandler, or function(text) when re-run after a kick (the original ChatHandler is gone by then).
+-- admin: { name, guid } of who ran it; kicked: true when re-run after the kick (character already locked).
+local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admin, kicked)
+    local send = type(reply) == "function" and reply or function(text) reply:SendSysMessage(text) end
+    admin = admin or { name = player and player:GetName() or "console", guid = player and tonumber(tostring(player:GetGUID())) or nil }
 
     if not cc_enableMailItemLog then
-        chatHandler:SendSysMessage("The mailed-items log is disabled (Config.enableMailItemLog = false).")
+        send("The mailed-items log is disabled (Config.enableMailItemLog = false).")
         return
     end
     if commandArray[startIdx] == nil then
-        cc_sendRestoreSyntax(chatHandler)
+        cc_sendRestoreSyntax(send)
         return
     end
 
     local targetName = cc_normalizeCharacterName(commandArray[startIdx])
-    local mode = commandArray[startIdx + 1] and string.lower(commandArray[startIdx + 1]) or "list"
-    local copyFilter = tonumber(commandArray[startIdx + 2])
-    if mode ~= "list" and mode ~= "missing" and mode ~= "all" then
-        cc_sendRestoreSyntax(chatHandler)
-        return
-    end
-    if commandArray[startIdx + 2] ~= nil and copyFilter == nil then
-        chatHandler:SendSysMessage("copyId must be a number.")
-        return
+    local mode, copyFilter, kick = "list", nil, false
+    for n = startIdx + 1, startIdx + 3 do
+        local token = commandArray[n] and string.lower(commandArray[n])
+        if token == nil then
+            break
+        elseif token == "list" or token == "missing" or token == "all" then
+            mode = token
+        elseif token == "kick" then
+            kick = true
+        elseif tonumber(token) ~= nil then
+            copyFilter = tonumber(token)
+        else
+            cc_sendRestoreSyntax(send)
+            return
+        end
     end
 
     local q = CharDBQuery("SELECT `guid`, `online` FROM `characters` WHERE `name` = "..cc_sqlQuote(targetName).." LIMIT 1;")
     if q == nil then
-        chatHandler:SendSysMessage("Character "..targetName.." not found.")
+        send("Character "..targetName.." not found.")
         return
     end
     local targetGuid, targetOnline = q:GetUInt32(0), q:GetUInt8(1)
+    local isOnline = targetOnline ~= 0 or GetPlayerByGUID(targetGuid) ~= nil
+
+    -- stop here without restoring; unlocks the character if we kicked/locked it
+    local function abort(text)
+        send(text)
+        if kicked then
+            cc_liftCarbonCopyBan(targetGuid)
+        end
+    end
+
+    if mode ~= "list" then
+        if cc_restoreBusy[targetGuid] then
+            abort("A restore for "..targetName.." is still finishing. Try again in a few seconds.")
+            return
+        end
+        if isOnline and not kicked then
+            if not kick then
+                send(targetName.." is online. Items can only be restored while the character is logged out "
+                    .."(enchants and gems are written to the database). Add 'kick' to kick and restore.")
+                return
+            end
+            -- the ban kicks the character and keeps it out; wait until its logout save is done, then run again
+            Ban(1, targetName, 60, CC_BAN_REASON_RESTORE, admin.name)
+            send("Kicking "..targetName..". The restore runs once the character is saved and offline.")
+            local notify = function(text) cc_notifyAdmin(admin.guid, text) end
+            local tries = 0
+            local function waitOffline()
+                tries = tries + 1
+                local o = CharDBQuery('SELECT `online` FROM `characters` WHERE `guid` = '..targetGuid..' LIMIT 1;')
+                local offline = GetPlayerByGUID(targetGuid) == nil and (o == nil or o:GetUInt8(0) == 0)
+                if offline then
+                    cc_execRestoreCommand(nil, notify, commandArray, startIdx, admin, true)
+                elseif tries < 15 then
+                    CreateLuaEvent(waitOffline, 1000, 1)
+                else
+                    notify("CarbonCopy restore: "..targetName.." did not go offline in time. Nothing was restored.")
+                    cc_liftCarbonCopyBan(targetGuid)
+                end
+            end
+            CreateLuaEvent(waitOffline, 2000, 1)
+            return
+        end
+    end
 
     local sql = 'SELECT `id`, `copy_id`, `kind`, `item_entry`, `item_guid`, `creator_guid`, `duration`, `charges`, `flags`, '
         ..'`enchantments`, `random_property_id`, `source_guid`, COALESCE(`source_name`, SPACE(0)), `source_item_guid`, '
@@ -858,7 +929,7 @@ local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx
     end
     q = CharDBQuery(sql..' ORDER BY `id`;')
     if q == nil then
-        chatHandler:SendSysMessage("No logged CarbonCopy mail items for "..targetName..(copyFilter and (" (copy "..copyFilter..")") or "")..".")
+        abort("No logged CarbonCopy mail items for "..targetName..(copyFilter and (" (copy "..copyFilter..")") or "")..".")
         return
     end
 
@@ -880,24 +951,18 @@ local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx
 
     if mode == "list" then
         local missingCount = 0
-        chatHandler:SendSysMessage("===== CarbonCopy mailed items for "..targetName.." (guid "..targetGuid..") =====")
+        send("===== CarbonCopy mailed items for "..targetName.." (guid "..targetGuid..") =====")
+        if isOnline then
+            send(targetName.." is online: locations are as of the last save.")
+        end
         for _, row in ipairs(rows) do
             if row.missing then
                 missingCount = missingCount + 1
             end
-            chatHandler:SendSysMessage("#"..row.id.." copy "..row.copyId.." "..row.kind.." "..row.createdAt..": "
+            send("#"..row.id.." copy "..row.copyId.." "..row.kind.." "..row.createdAt..": "
                 ..cc_itemLabel(player, row.entry).." - "..(row.missing and "MISSING, " or "")..row.where)
         end
-        chatHandler:SendSysMessage(#rows.." item(s), "..missingCount.." missing. Use: .carboncopy restore "..targetName.." missing|all [copyId]")
-        return
-    end
-
-    if targetOnline ~= 0 or GetPlayerByGUID(targetGuid) ~= nil then
-        chatHandler:SendSysMessage(targetName.." must be logged out to restore items (enchants and gems are written to the database).")
-        return
-    end
-    if cc_restoreBusy[targetGuid] then
-        chatHandler:SendSysMessage("A restore for "..targetName.." is still finishing. Try again in a few seconds.")
+        send(#rows.." item(s), "..missingCount.." missing. Use: .carboncopy restore "..targetName.." missing|all [copyId] [kick]")
         return
     end
 
@@ -913,18 +978,20 @@ local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx
         end
     end
     if skippedUnknown > 0 then
-        chatHandler:SendSysMessage(skippedUnknown.." item(s) skipped: their entry no longer exists in item_template.")
+        send(skippedUnknown.." item(s) skipped: their entry no longer exists in item_template.")
     end
     if #toRestore == 0 then
-        chatHandler:SendSysMessage("Nothing to restore for "..targetName.." ("..mode..").")
+        abort("Nothing to restore for "..targetName.." ("..mode..").")
         return
     end
 
-    -- keep the character offline while the mail and enchants are written
-    Ban(1, targetName, 30, "CarbonCopy restore", adminName)
+    -- keep the character offline while the mail and enchants are written (lifted by cc_finishRestore)
+    if not kicked then
+        Ban(1, targetName, 60, CC_BAN_REASON_RESTORE, admin.name)
+    end
 
     local job = { pairs = {}, attempts = 0, targetGuid = targetGuid, targetName = targetName,
-        adminName = adminName, adminGuid = adminGuid, mode = mode }
+        adminName = admin.name, adminGuid = admin.guid, mode = mode, kicked = kicked }
     local body = "Hello "..targetName..",\n \n these items from your Carbon Copy have been restored by a Game Master."
     local i = 1
     while i <= #toRestore do
@@ -937,7 +1004,7 @@ local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx
         end
         local result = { pcall(SendMail, cc_unpack(args)) }
         if not result[1] then
-            chatHandler:SendSysMessage("SendMail failed: "..tostring(result[2]))
+            send("SendMail failed: "..tostring(result[2]))
             break
         end
         for n, row in ipairs(chunk) do
@@ -949,13 +1016,14 @@ local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx
     end
 
     if #job.pairs == 0 then
-        chatHandler:SendSysMessage("No items were mailed.")
+        send("No items were mailed.")
+        cc_liftCarbonCopyBan(targetGuid)
         return
     end
 
     cc_restoreBusy[targetGuid] = true
-    chatHandler:SendSysMessage("Mailing "..#job.pairs.." item(s) to "..targetName.." ("..mode.."). Enchants are applied in a few seconds; "
-        ..targetName.." is locked out for 30 seconds.")
+    send("Mailing "..#job.pairs.." item(s) to "..targetName.." ("..mode.."). Enchants are applied in a few seconds, "
+        ..targetName.." is locked out until then.")
     CreateLuaEvent(function() cc_finishRestore(job) end, 3000, 1)
 end
 
@@ -1622,14 +1690,16 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         -------------- COPY SCRIPT STARTS HERE ---------------------
-        --set Global variable to prevent simultaneous action and lock the target for 25 seconds
-        --(copy ~11s + item fix 3s + up to 5s waiting for the mail transaction to commit)
-        Ban(1, targetName, 25, "CarbonCopy", "CarbonCopy" )
+        --set Global variable to prevent simultaneous action and lock the target.
+        --The ban is lifted by cc_fixItems as soon as the copy is done; 60s is only the fallback if that never runs.
+        Ban(1, targetName, 60, CC_BAN_REASON_COPY, "CarbonCopy" )
         cc_scriptIsBusy = 1
         cc_newCharacter = newCharacter
         cc_newCharacterName = targetName
         cc_copyTicketsBefore = availableTickets
         cc_copyTicketsAfter = availableTickets - requiredTickets
+        cc_copySourceName = sourceName
+        cc_copySourceLevel = player:GetLevel()
 
         -- save the source character to db to prevent recent changes from being not applied
         player:SaveToDB()
@@ -1921,9 +1991,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         CreateLuaEvent(cc_fixItems, 3000) -- do it after 3 seconds
         cc_deleteTempTables(cc_playerGUID)
 
-        cc_chatHandler:SendSysMessage("Character copy complete! The character "..targetName.." has been successfully copied.")
-        cc_logPlayer(sourceName, sourceGuid, targetName, cc_newCharacter, player:GetLevel(), oldTickets - 1, oldTickets, CC_STATUS_SUCCESS, "Character copied")
-
+        -- the "copy complete" message and the success log are written by cc_fixItems, once the items are really done
         cc_resetVariables()
 
         return false
@@ -2172,11 +2240,24 @@ function cc_fixItems()
     cc_totemMailGuids = {}
     cc_totemItemGuids = {}
 
-    local copyingPlayer = cc_playerGUID ~= nil and GetPlayerByGUID(cc_playerGUID) or nil
-    if copyingPlayer ~= nil then
-        copyingPlayer:SendBroadcastMessage("Character copy done. You can log out now.")
-    end
+    -- everything is written: unlock the new character and log the success
+    cc_liftCarbonCopyBan(cc_newCharacter)
+    local doneTargetName = cc_newCharacterName or cc_characterNameByGuid(cc_newCharacter) or tostring(cc_newCharacter)
+    cc_logPlayer(cc_copySourceName or cc_characterNameByGuid(cc_playerGUID), cc_playerGUID, doneTargetName, cc_newCharacter,
+        cc_copySourceLevel, cc_copyTicketsBefore, cc_copyTicketsAfter, CC_STATUS_SUCCESS, "Character copied")
+
+    -- tell the player a few seconds later, so the unlock has settled before they log out and pick the new character
+    local doneSourceGuid = cc_playerGUID
+    CreateLuaEvent(function()
+        local copyingPlayer = doneSourceGuid ~= nil and GetPlayerByGUID(doneSourceGuid) or nil
+        if copyingPlayer ~= nil then
+            copyingPlayer:SendBroadcastMessage("Character copy complete! "..doneTargetName.." has been copied. You can log out now.")
+        end
+    end, cc_doneMessageDelay * 1000, 1)
+
     PrintInfo("2) Item enchants/gems copied for new character with GUID "..cc_newCharacter);
+    cc_copySourceName = nil
+    cc_copySourceLevel = nil
     cc_newCharacter = 0
     cc_newCharacterName = nil
     cc_copyTicketsBefore = nil

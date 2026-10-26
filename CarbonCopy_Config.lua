@@ -32,6 +32,9 @@ Config.minGMRankForRestore = 2
 -- Expired GM mail is deleted together with its items, it is never returned.
 Config.mailExpireDays = 0
 
+-- Seconds to wait, after a copy is fully done and the new character unlocked, before telling the player they can log out.
+Config.doneMessageDelay = 5
+
 -- The amount of free tickets to grant when .carboncopy is executed for the first time on that account
 Config.freeTickets = 4
 
