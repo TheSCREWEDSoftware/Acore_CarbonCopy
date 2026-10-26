@@ -40,14 +40,15 @@ local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
 local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 0
 -- Signs the copy / restore mails (the rest of the mail text is in CarbonCopy_Locale.lua)
 local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
--- Copied / restored items are soulbound (default) or keep the binding state of a fresh item (BoE stays tradeable).
+-- true: copied / restored items get the soulbound flag added. false: they keep exactly the original item's flags.
 local cc_makeCopySoulbounded = Config.makeCopySoulbounded ~= false
 
--- SQL for the flags of a copied item, from the original's flags (column or number):
--- drops soulbound (0x1), BoP-tradeable (0x100) and refundable (0x1000) - those belong to the original item -
--- then sets soulbound again if Config.makeCopySoulbounded.
+-- SQL for the flags of a copied item, from the original's flags (column or number).
 local function cc_copyFlagsSql(sourceFlags)
-    return '((('..sourceFlags..') & 4294962942) | '..(cc_makeCopySoulbounded and 1 or 0)..')'
+    if cc_makeCopySoulbounded then
+        return '(('..sourceFlags..') | 1)'
+    end
+    return '('..sourceFlags..')'
 end
 
 -- Ban reasons used to lock a character during a copy / restore; only bans with these reasons are lifted by the script.

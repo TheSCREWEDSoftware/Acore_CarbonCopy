@@ -63,9 +63,8 @@ Config.keepStartingItems = false
 -- Whether to copy equipment sets to the new character (requires "Use Equipment Manager" enabled in Interface > Features) (true = yes | false = no)
 Config.copyEquipmentSets = false
 
--- Make the copied (and restored) items soulbound (true = yes | false = no).
--- false: items arrive like freshly created ones, so Bind on Equip gear stays tradeable until equipped
--- (Bind on Pickup still binds when taken from the mail). Note that false lets players duplicate BoE items.
+-- Copied (and restored) items: true = add the soulbound flag to the original item's flags.
+-- false = keep exactly the original item's flags (a soulbound original gives a soulbound copy, an unbound BoE stays unbound).
 Config.makeCopySoulbounded = true
 
 -- Here you can adjust the cost in tickets if Config.ticketCost is set to "level"
