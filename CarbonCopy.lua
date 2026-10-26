@@ -262,6 +262,9 @@ local function cc_sqlQuote(value)
     return "'"..escaped.."'"
 end
 
+-- Most tickets an account can hold. Adding is refused when the new total would go over it.
+local CC_MAX_TICKETS = 1000
+
 -- A ticket amount from a command: a whole number from 0 to 1000.
 local function cc_validTicketAmount(text)
     local amount = tonumber(text)
@@ -1476,7 +1479,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
                 end
 
-                if oldTickets >= 1000 or oldTickets < 0 then
+                if oldTickets < 0 or oldTickets + tonumber(commandArray[5]) > CC_MAX_TICKETS then   -- the new total may not pass the cap
                     local reason = cc_t(nil, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets)
                     chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets))
                     cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets, CC_STATUS_FAILED, reason)
@@ -1746,7 +1749,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
                 end
 
-                if oldTickets >= 1000 or oldTickets < 0 then
+                if oldTickets < 0 or oldTickets + tonumber(commandArray[5]) > CC_MAX_TICKETS then   -- the new total may not pass the cap
                     local reason = cc_t(nil, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets)
                     chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets))
                     cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets, CC_STATUS_FAILED, reason)
@@ -2380,7 +2383,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
             Data_SQL = nil
 
-            if oldTickets >= 1000 or oldTickets < 0 then
+            if oldTickets < 0 or oldTickets + tonumber(commandArray[3]) > CC_MAX_TICKETS then   -- the new total may not pass the cap
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[3], oldTickets))
                 return false
             end
@@ -2427,7 +2430,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
             Data_SQL = nil
 
-            if oldTickets >= 1000 or oldTickets < 0 then
+            if oldTickets < 0 or oldTickets + tonumber(commandArray[3]) > CC_MAX_TICKETS then   -- the new total may not pass the cap
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[3], oldTickets))
                 return false
             end
@@ -2469,7 +2472,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
         end
 
-        if oldTickets >= 1000 or oldTickets < 0 then
+        if oldTickets < 0 or oldTickets + tonumber(commandArray[3]) > CC_MAX_TICKETS then   -- the new total may not pass the cap
             chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[3], oldTickets))
             cc_logAdmin("console", nil, commandArray[2], nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets, CC_STATUS_FAILED, "CCACCOUNTTICKETS total exceeds max")
             return false
