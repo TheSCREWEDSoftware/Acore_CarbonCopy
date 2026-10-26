@@ -9,16 +9,28 @@ Config.customDbName = 'ac_eluna'
 Config.carboncopyTableName = 'carboncopy'
 Config.playerLogsTableName = 'carboncopy_player_logs'
 Config.adminLogsTableName = 'carboncopy_admin_logs'
+Config.mailItemsTableName = 'carboncopy_mail_items'
 
 -- Enable or disable writing of logs and auto creation of log tables
 Config.enablePlayerLogs = true
 Config.enableAdminLogs = true
+
+-- Log every item mailed by a copy (with enchants, gems and random suffix) so an admin can restore it
+-- with .carboncopy restore $characterName [missing|all]. Also auto-creates the table above.
+Config.enableMailItemLog = true
 
 -- Min GM Level to use the .carboncopy command. Set to 0 for all players.
 Config.minGMRankForCopy = 0
 
 -- Min GM Level to add tickets to an account.
 Config.minGMRankForTickets = 2
+
+-- Min GM Level to list and restore mailed items (.carboncopy restore).
+Config.minGMRankForRestore = 2
+
+-- Days the copy / restore mails stay in the mailbox. 0 = never expire (until 2038). -1 = core default (30 days).
+-- Expired GM mail is deleted together with its items, it is never returned.
+Config.mailExpireDays = 0
 
 -- The amount of free tickets to grant when .carboncopy is executed for the first time on that account
 Config.freeTickets = 4

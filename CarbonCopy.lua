@@ -28,6 +28,14 @@ local cc_playerLogsTable = Config.playerLogsTableName or "carboncopy_player_logs
 local cc_adminLogsTable = Config.adminLogsTableName or "carboncopy_admin_logs"
 local cc_enablePlayerLogs = Config.enablePlayerLogs ~= false
 local cc_enableAdminLogs = Config.enableAdminLogs ~= false
+local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
+local cc_enableMailItemLog = Config.enableMailItemLog ~= false
+local cc_mailExpireDays = tonumber(Config.mailExpireDays) or 0
+local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
+
+-- "Never expires" = 2038-01-01. Kept below 2^31 so no signed 32-bit time math (core or client) can overflow it.
+local CC_MAIL_NEVER_EXPIRES = 2145916800
+local cc_unpack = table.unpack or unpack
 
 
 ------------------------------------------
@@ -41,6 +49,10 @@ cc_scriptIsBusy = 0
 cc_newCharacterName = nil
 cc_copyTicketsBefore = nil
 cc_copyTicketsAfter = nil
+cc_totemMailGuids = {}      -- every item guid in the shaman totem mail (fillers included), used to find the mail
+cc_totemItemGuids = {}      -- only the real totems, used for the mailed-items log
+cc_fixItemsAttempts = 0
+cc_restoreBusy = {}         -- target guid -> true while a restore for that character is being finalised
 
 -- If module runs for the first time, create the db specified in Config.dbName and add the "carboncopy" table to it.
 CharDBQuery('CREATE DATABASE IF NOT EXISTS `'..Config.customDbName..'`;');
@@ -79,7 +91,7 @@ if cc_enableAdminLogs then
         ..'`target_name` VARCHAR(12) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL, '
         ..'`target_guid` INT(11) DEFAULT NULL, '
         ..'`target_level` TINYINT UNSIGNED DEFAULT NULL, '
-        ..'`action_code` TINYINT UNSIGNED NOT NULL COMMENT "3=GM_ADD,4=GM_REMOVE,5=GM_LOOKUP", '
+        ..'`action_code` TINYINT UNSIGNED NOT NULL COMMENT "3=GM_ADD,4=GM_REMOVE,5=GM_LOOKUP,6=GM_RESTORE", '
         ..'`tickets_before` INT(11) DEFAULT NULL, '
         ..'`tickets_after` INT(11) DEFAULT NULL, '
         ..'`status_code` TINYINT UNSIGNED NOT NULL COMMENT "1=SUCCESS,2=FAILED", '
@@ -100,6 +112,40 @@ local CC_STATUS_FAILED = 2
 local CC_ACTION_GM_ADD = 3
 local CC_ACTION_GM_REMOVE = 4
 local CC_ACTION_GM_LOOKUP = 5
+local CC_ACTION_GM_RESTORE = 6
+
+-- Every item mailed by a copy (or by a restore) with a snapshot of its enchants/gems/suffix, so an admin can re-send it.
+-- A row with superseded_by_id set has been replaced by a restored copy and is no longer considered.
+if cc_enableMailItemLog then
+    CharDBQuery('CREATE TABLE IF NOT EXISTS `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` ('
+        ..'`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, '
+        ..'`copy_id` INT UNSIGNED NOT NULL, '
+        ..'`kind` VARCHAR(8) NOT NULL DEFAULT "copy" COMMENT "copy or restore", '
+        ..'`source_guid` INT UNSIGNED DEFAULT NULL, '
+        ..'`source_name` VARCHAR(12) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL, '
+        ..'`target_guid` INT UNSIGNED NOT NULL, '
+        ..'`target_name` VARCHAR(12) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, '
+        ..'`item_entry` INT UNSIGNED NOT NULL, '
+        ..'`source_item_guid` INT UNSIGNED DEFAULT NULL COMMENT "item on the source character it was copied from", '
+        ..'`item_guid` INT UNSIGNED NOT NULL COMMENT "the mailed item", '
+        ..'`mail_id` INT UNSIGNED DEFAULT NULL, '
+        ..'`creator_guid` INT UNSIGNED NOT NULL DEFAULT 0, '
+        ..'`duration` INT NOT NULL DEFAULT 0, '
+        ..'`charges` VARCHAR(255) NOT NULL DEFAULT "", '
+        ..'`flags` INT UNSIGNED NOT NULL DEFAULT 0, '
+        ..'`enchantments` TEXT NOT NULL, '
+        ..'`random_property_id` SMALLINT NOT NULL DEFAULT 0, '
+        ..'`restored_from_id` INT UNSIGNED DEFAULT NULL, '
+        ..'`superseded_by_id` INT UNSIGNED DEFAULT NULL, '
+        ..'`restored_by` VARCHAR(32) DEFAULT NULL, '
+        ..'`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, '
+        ..'PRIMARY KEY (`id`), '
+        ..'KEY `idx_ccmi_target_guid` (`target_guid`), '
+        ..'KEY `idx_ccmi_item_guid` (`item_guid`), '
+        ..'KEY `idx_ccmi_copy_id` (`copy_id`)'
+        ..') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DEFAULT;'
+    )
+end
 
 local function cc_sqlQuote(value)
     if value == nil then
@@ -575,6 +621,344 @@ local function cc_sendTicketCosts(player, chatHandler)
     chatHandler:SendSysMessage(cc_info(player, "STARTER_TICKETS", Config.freeTickets))
 end
 
+------------------------------------------
+-- Mail expiry / mailed-items log / restore
+------------------------------------------
+
+-- expire_time to put on CarbonCopy mails, or nil to leave the core default (30 days).
+local function cc_mailExpireTime()
+    if cc_mailExpireDays < 0 then
+        return nil
+    end
+    if cc_mailExpireDays == 0 then
+        return CC_MAIL_NEVER_EXPIRES
+    end
+    return math.min(os.time() + cc_mailExpireDays * 86400, CC_MAIL_NEVER_EXPIRES)
+end
+
+-- Pushes the expiry of every mail (to this receiver) that holds one of these items.
+local function cc_extendMailForItems(receiverGuid, itemGuids)
+    local expire = cc_mailExpireTime()
+    if expire == nil or #itemGuids == 0 then
+        return
+    end
+    CharDBQuery('UPDATE `mail` AS m INNER JOIN `mail_items` AS mi ON mi.mail_id = m.id '
+        ..'SET m.expire_time = '..expire..' '
+        ..'WHERE m.receiver = '..receiverGuid..' AND mi.item_guid IN ('..table.concat(itemGuids, ',')..');')
+end
+
+-- SendMail commits asynchronously: true once every item is visible in mail_items.
+local function cc_mailItemsCommitted(itemGuids)
+    if #itemGuids == 0 then
+        return true
+    end
+    local q = CharDBQuery('SELECT `item_guid` FROM `mail_items` WHERE `item_guid` IN ('..table.concat(itemGuids, ',')..');')
+    return q ~= nil and q:GetRowCount() >= #itemGuids
+end
+
+local function cc_characterNameByGuid(guid)
+    if guid == nil then
+        return nil
+    end
+    local q = CharDBQuery('SELECT `name` FROM `characters` WHERE `guid` = '..guid..' LIMIT 1;')
+    if q == nil then
+        return nil
+    end
+    return q:GetString(0)
+end
+
+-- Item link in game, "Name (entry)" on the console.
+local function cc_itemLabel(player, entry)
+    if player ~= nil and GetItemLink ~= nil then
+        return GetItemLink(entry, player:GetDbcLocale())
+    end
+    local q = WorldDBQuery('SELECT `name` FROM `item_template` WHERE `entry` = '..entry..' LIMIT 1;')
+    if q ~= nil then
+        return q:GetString(0).." ("..entry..")"
+    end
+    return "item "..entry
+end
+
+-- Snapshots the mailed item (as it is in item_instance right now) into the mailed-items log.
+local function cc_logMailedItem(copyId, kind, sourceGuid, sourceName, targetGuid, targetName, sourceItemGuid, itemGuid, restoredFromId, restoredBy)
+    if not cc_enableMailItemLog or itemGuid == nil then
+        return
+    end
+    CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` ('
+        ..'`copy_id`, `kind`, `source_guid`, `source_name`, `target_guid`, `target_name`, `item_entry`, `source_item_guid`, '
+        ..'`item_guid`, `mail_id`, `creator_guid`, `duration`, `charges`, `flags`, `enchantments`, `random_property_id`, '
+        ..'`restored_from_id`, `restored_by`) '
+        ..'SELECT '..copyId..', '..cc_sqlQuote(kind)..', '..cc_sqlNumber(sourceGuid)..', '..cc_sqlQuote(sourceName)..', '
+        ..targetGuid..', '..cc_sqlQuote(targetName or "?")..', ii.itemEntry, '..cc_sqlNumber(sourceItemGuid)..', '
+        ..'ii.guid, (SELECT mi.mail_id FROM `mail_items` AS mi WHERE mi.item_guid = ii.guid LIMIT 1), '
+        ..'ii.creatorGuid, ii.duration, COALESCE(ii.charges, SPACE(0)), COALESCE(ii.flags, 0), ii.enchantments, ii.randomPropertyId, '
+        ..cc_sqlNumber(restoredFromId)..', '..cc_sqlQuote(restoredBy)..' '
+        ..'FROM `item_instance` AS ii WHERE ii.guid = '..itemGuid..';')
+end
+
+local function cc_nextCopyId()
+    local q = CharDBQuery('SELECT MAX(`copy_id`) FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'`;')
+    if q == nil or q:IsNull(0) then
+        return 1
+    end
+    return q:GetUInt32(0) + 1
+end
+
+-- Where a logged item is now. Returns isMissing, description.
+-- Anything still owned by the target (bags, bank, keyring, mailbox, auction) or still existing elsewhere
+-- (guild bank, another character) is NOT missing; only items that no longer exist (or are lost) are.
+local function cc_locateMailedItem(itemGuid, targetGuid)
+    local q = CharDBQuery('SELECT `guid`, `bag`, `slot` FROM `character_inventory` WHERE `item` = '..itemGuid..' LIMIT 1;')
+    if q ~= nil then
+        local owner, bag, slot = q:GetUInt32(0), q:GetUInt32(1), q:GetUInt8(2)
+        if owner ~= targetGuid then
+            return false, "on another character ("..(cc_characterNameByGuid(owner) or owner)..")"
+        end
+        if bag == 0 then
+            if slot < 19 then return false, "equipped" end
+            if slot < 23 then return false, "equipped bag" end
+            if slot < 39 then return false, "backpack" end
+            if slot < 67 then return false, "bank" end
+            if slot < 74 then return false, "bank bag slot" end
+            if slot >= 86 and slot < 118 then return false, "keyring" end
+            return false, "inventory"
+        end
+        local p = CharDBQuery('SELECT `slot` FROM `character_inventory` WHERE `item` = '..bag..' LIMIT 1;')
+        if p ~= nil and p:GetUInt8(0) >= 67 and p:GetUInt8(0) < 74 then
+            return false, "bank (in a bag)"
+        end
+        return false, "bags"
+    end
+
+    q = CharDBQuery('SELECT `mail_id`, `receiver` FROM `mail_items` WHERE `item_guid` = '..itemGuid..' LIMIT 1;')
+    if q ~= nil then
+        local mailId, receiver = q:GetUInt32(0), q:GetUInt32(1)
+        if receiver == targetGuid then
+            return false, "mailbox (mail "..mailId..")"
+        end
+        if receiver == 0 then
+            return true, "mail was returned to nobody (lost)"
+        end
+        return false, "in mail to "..(cc_characterNameByGuid(receiver) or receiver)
+    end
+
+    if CharDBQuery('SELECT 1 FROM `auctionhouse` WHERE `itemguid` = '..itemGuid..' LIMIT 1;') ~= nil then
+        return false, "auction house"
+    end
+    if CharDBQuery('SELECT 1 FROM `guild_bank_item` WHERE `item_guid` = '..itemGuid..' LIMIT 1;') ~= nil then
+        return false, "guild bank"
+    end
+    if CharDBQuery('SELECT 1 FROM `item_instance` WHERE `guid` = '..itemGuid..' LIMIT 1;') ~= nil then
+        return true, "orphaned (not in any container)"
+    end
+    return true, "gone (sold, destroyed or mail deleted)"
+end
+
+-- Tells the admin (in game if still online, else the server log) how a delayed restore went.
+local function cc_notifyAdmin(adminGuid, text)
+    PrintInfo("CarbonCopy: "..text)
+    if adminGuid ~= nil then
+        local admin = GetPlayerByGUID(adminGuid)
+        if admin ~= nil then
+            admin:SendBroadcastMessage(text)
+        end
+    end
+end
+
+local function cc_sendRestoreSyntax(chatHandler)
+    chatHandler:SendSysMessage("Syntax: .carboncopy restore $characterName                    (list mailed items and where they are now)")
+    chatHandler:SendSysMessage("Syntax: .carboncopy restore $characterName missing [copyId]   (re-send only items that no longer exist)")
+    chatHandler:SendSysMessage("Syntax: .carboncopy restore $characterName all [copyId]       (re-send every logged item)")
+end
+
+-- Writes enchants/gems/suffix back onto the restored items, keeps the mail, logs the new items.
+-- Runs a few seconds after SendMail so its transaction is committed; retries a few times if not yet.
+local function cc_finishRestore(job)
+    local newGuids = {}
+    for _, pair in ipairs(job.pairs) do
+        table.insert(newGuids, pair.newGuid)
+    end
+
+    if not cc_mailItemsCommitted(newGuids) and job.attempts < 5 then
+        job.attempts = job.attempts + 1
+        CreateLuaEvent(function() cc_finishRestore(job) end, 1000, 1)
+        return
+    end
+
+    for _, pair in ipairs(job.pairs) do
+        local row = pair.row
+        CharDBQuery('UPDATE `item_instance` SET `owner_guid` = '..job.targetGuid..', '
+            ..'`creatorGuid` = '..row.creatorGuid..', `duration` = '..row.duration..', '
+            ..'`charges` = '..cc_sqlQuote(row.charges)..', `flags` = '..row.flags..', '
+            ..'`enchantments` = '..cc_sqlQuote(row.enchantments)..', `randomPropertyId` = '..row.randomPropertyId..' '
+            ..'WHERE `guid` = '..pair.newGuid..';')
+    end
+
+    cc_extendMailForItems(job.targetGuid, newGuids)
+
+    for _, pair in ipairs(job.pairs) do
+        local row = pair.row
+        cc_logMailedItem(row.copyId, "restore", row.sourceGuid, row.sourceName, job.targetGuid, job.targetName,
+            row.sourceItemGuid, pair.newGuid, row.id, job.adminName)
+        local q = CharDBQuery('SELECT `id` FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` '
+            ..'WHERE `item_guid` = '..pair.newGuid..' ORDER BY `id` DESC LIMIT 1;')
+        if q ~= nil then
+            CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` SET `superseded_by_id` = '..q:GetUInt32(0)
+                ..' WHERE `id` = '..row.id..';')
+        end
+    end
+
+    cc_restoreBusy[job.targetGuid] = nil
+    local text = "CarbonCopy restore: "..#job.pairs.." item(s) mailed to "..job.targetName.." ("..job.mode..")."
+    cc_notifyAdmin(job.adminGuid, text)
+    cc_logAdmin(job.adminName, job.adminGuid, job.targetName, job.targetGuid, nil, CC_ACTION_GM_RESTORE, nil, nil,
+        CC_STATUS_SUCCESS, "Restored "..#job.pairs.." item(s), mode "..job.mode)
+end
+
+-- .carboncopy restore $name [missing|all|list] [copyId]   (GM or console)
+local function cc_execRestoreCommand(player, chatHandler, commandArray, startIdx)
+    local adminName = player and player:GetName() or "console"
+    local adminGuid = player and tonumber(tostring(player:GetGUID())) or nil
+
+    if not cc_enableMailItemLog then
+        chatHandler:SendSysMessage("The mailed-items log is disabled (Config.enableMailItemLog = false).")
+        return
+    end
+    if commandArray[startIdx] == nil then
+        cc_sendRestoreSyntax(chatHandler)
+        return
+    end
+
+    local targetName = cc_normalizeCharacterName(commandArray[startIdx])
+    local mode = commandArray[startIdx + 1] and string.lower(commandArray[startIdx + 1]) or "list"
+    local copyFilter = tonumber(commandArray[startIdx + 2])
+    if mode ~= "list" and mode ~= "missing" and mode ~= "all" then
+        cc_sendRestoreSyntax(chatHandler)
+        return
+    end
+    if commandArray[startIdx + 2] ~= nil and copyFilter == nil then
+        chatHandler:SendSysMessage("copyId must be a number.")
+        return
+    end
+
+    local q = CharDBQuery("SELECT `guid`, `online` FROM `characters` WHERE `name` = "..cc_sqlQuote(targetName).." LIMIT 1;")
+    if q == nil then
+        chatHandler:SendSysMessage("Character "..targetName.." not found.")
+        return
+    end
+    local targetGuid, targetOnline = q:GetUInt32(0), q:GetUInt8(1)
+
+    local sql = 'SELECT `id`, `copy_id`, `kind`, `item_entry`, `item_guid`, `creator_guid`, `duration`, `charges`, `flags`, '
+        ..'`enchantments`, `random_property_id`, `source_guid`, COALESCE(`source_name`, SPACE(0)), `source_item_guid`, '
+        ..'DATE_FORMAT(`created_at`, "%Y-%m-%d %H:%i") '
+        ..'FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` '
+        ..'WHERE `target_guid` = '..targetGuid..' AND `superseded_by_id` IS NULL'
+    if copyFilter ~= nil then
+        sql = sql..' AND `copy_id` = '..copyFilter
+    end
+    q = CharDBQuery(sql..' ORDER BY `id`;')
+    if q == nil then
+        chatHandler:SendSysMessage("No logged CarbonCopy mail items for "..targetName..(copyFilter and (" (copy "..copyFilter..")") or "")..".")
+        return
+    end
+
+    local rows = {}
+    repeat
+        local row = {
+            id = q:GetUInt32(0), copyId = q:GetUInt32(1), kind = q:GetString(2), entry = q:GetUInt32(3),
+            itemGuid = q:GetUInt32(4), creatorGuid = q:GetUInt32(5), duration = q:GetInt32(6), charges = q:GetString(7),
+            flags = q:GetUInt32(8), enchantments = q:GetString(9), randomPropertyId = q:GetInt16(10),
+            sourceGuid = (not q:IsNull(11)) and q:GetUInt32(11) or nil, sourceName = q:GetString(12),
+            sourceItemGuid = (not q:IsNull(13)) and q:GetUInt32(13) or nil, createdAt = q:GetString(14),
+        }
+        if row.sourceName == "" then
+            row.sourceName = nil
+        end
+        row.missing, row.where = cc_locateMailedItem(row.itemGuid, targetGuid)
+        table.insert(rows, row)
+    until not q:NextRow()
+
+    if mode == "list" then
+        local missingCount = 0
+        chatHandler:SendSysMessage("===== CarbonCopy mailed items for "..targetName.." (guid "..targetGuid..") =====")
+        for _, row in ipairs(rows) do
+            if row.missing then
+                missingCount = missingCount + 1
+            end
+            chatHandler:SendSysMessage("#"..row.id.." copy "..row.copyId.." "..row.kind.." "..row.createdAt..": "
+                ..cc_itemLabel(player, row.entry).." - "..(row.missing and "MISSING, " or "")..row.where)
+        end
+        chatHandler:SendSysMessage(#rows.." item(s), "..missingCount.." missing. Use: .carboncopy restore "..targetName.." missing|all [copyId]")
+        return
+    end
+
+    if targetOnline ~= 0 or GetPlayerByGUID(targetGuid) ~= nil then
+        chatHandler:SendSysMessage(targetName.." must be logged out to restore items (enchants and gems are written to the database).")
+        return
+    end
+    if cc_restoreBusy[targetGuid] then
+        chatHandler:SendSysMessage("A restore for "..targetName.." is still finishing. Try again in a few seconds.")
+        return
+    end
+
+    local toRestore = {}
+    local skippedUnknown = 0
+    for _, row in ipairs(rows) do
+        if mode == "all" or row.missing then
+            if WorldDBQuery('SELECT 1 FROM `item_template` WHERE `entry` = '..row.entry..' LIMIT 1;') ~= nil then
+                table.insert(toRestore, row)
+            else
+                skippedUnknown = skippedUnknown + 1
+            end
+        end
+    end
+    if skippedUnknown > 0 then
+        chatHandler:SendSysMessage(skippedUnknown.." item(s) skipped: their entry no longer exists in item_template.")
+    end
+    if #toRestore == 0 then
+        chatHandler:SendSysMessage("Nothing to restore for "..targetName.." ("..mode..").")
+        return
+    end
+
+    -- keep the character offline while the mail and enchants are written
+    Ban(1, targetName, 30, "CarbonCopy restore", adminName)
+
+    local job = { pairs = {}, attempts = 0, targetGuid = targetGuid, targetName = targetName,
+        adminName = adminName, adminGuid = adminGuid, mode = mode }
+    local body = "Hello "..targetName..",\n \n these items from your Carbon Copy have been restored by a Game Master."
+    local i = 1
+    while i <= #toRestore do
+        local chunk = {}
+        local args = { "Restored items", body, targetGuid, 0, 61, 0, 0, 0 }
+        for n = i, math.min(i + 11, #toRestore) do      -- 12 items per mail
+            table.insert(chunk, toRestore[n])
+            table.insert(args, toRestore[n].entry)
+            table.insert(args, 1)
+        end
+        local result = { pcall(SendMail, cc_unpack(args)) }
+        if not result[1] then
+            chatHandler:SendSysMessage("SendMail failed: "..tostring(result[2]))
+            break
+        end
+        for n, row in ipairs(chunk) do
+            if result[n + 1] ~= nil then
+                table.insert(job.pairs, { row = row, newGuid = result[n + 1] })
+            end
+        end
+        i = i + 12
+    end
+
+    if #job.pairs == 0 then
+        chatHandler:SendSysMessage("No items were mailed.")
+        return
+    end
+
+    cc_restoreBusy[targetGuid] = true
+    chatHandler:SendSysMessage("Mailing "..#job.pairs.." item(s) to "..targetName.." ("..mode.."). Enchants are applied in a few seconds; "
+        ..targetName.." is locked out for 30 seconds.")
+    CreateLuaEvent(function() cc_finishRestore(job) end, 3000, 1)
+end
+
 function cc_CopyCharacter(event, player, command, chatHandler)
 
     local commandArray = cc_splitString(command)
@@ -763,6 +1147,12 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
+        if player == nil and ccSubCommandConsole == "restore" then
+            cc_execRestoreCommand(nil, chatHandler, commandArray, 3)
+            cc_resetVariables()
+            return false
+        end
+
         if player == nil and ccSubCommandConsole == "logs" then
             cc_execLogsCommand(chatHandler, commandArray, 3)
             cc_resetVariables()
@@ -782,6 +1172,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
             chatHandler:SendSysMessage("Syntax: .carboncopy config")
             chatHandler:SendSysMessage("Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]")
+            cc_sendRestoreSyntax(chatHandler)
             chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
             chatHandler:SendSysMessage("Syntax: CCACCOUNTTICKETS $accountName $amount")
             chatHandler:SendSysMessage(".carboncopy $newCharacterName can only be run in game, from the character to copy.")
@@ -817,6 +1208,9 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
             chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
             chatHandler:SendSysMessage("Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--limit N] [--oldest]")
+            if player:GetGMRank() >= cc_minGMRankForRestore then
+                cc_sendRestoreSyntax(chatHandler)
+            end
             cc_resetVariables()
             return false
         end
@@ -1053,6 +1447,17 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
+        if ccSubCommand == "restore" then
+            if player:GetGMRank() < cc_minGMRankForRestore then
+                chatHandler:SendSysMessage("You lack permissions to execute this command.")
+                cc_resetVariables()
+                return false
+            end
+            cc_execRestoreCommand(player, chatHandler, commandArray, 3)
+            cc_resetVariables()
+            return false
+        end
+
         -- check maxLevel
         if player:GetLevel() > Config.maxLevel then
             local reason = "The character you want to copy from is too high level. Max level is "..Config.maxLevel..". Aborting."
@@ -1217,8 +1622,9 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         -------------- COPY SCRIPT STARTS HERE ---------------------
-        --set Global variable to prevent simultaneous action and lock the target for 15 seconds
-        Ban(1, targetName, 15, "CarbonCopy", "CarbonCopy" )
+        --set Global variable to prevent simultaneous action and lock the target for 25 seconds
+        --(copy ~11s + item fix 3s + up to 5s waiting for the mail transaction to commit)
+        Ban(1, targetName, 25, "CarbonCopy", "CarbonCopy" )
         cc_scriptIsBusy = 1
         cc_newCharacter = newCharacter
         cc_newCharacterName = targetName
@@ -1387,7 +1793,17 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
             Data_SQL = nil
 
-            SendMail("Copied items", "Hello "..targetName..Config.mailText, cc_newCharacter, 0, 61, 0, 0, 0, totemItem[1], 1, totemItem[2], 1, totemItem[3], 1, totemItem[4], 1, totemItem[5], 1)
+            local totemGuids = { SendMail("Copied items", "Hello "..targetName..Config.mailText, cc_newCharacter, 0, 61, 0, 0, 0, totemItem[1], 1, totemItem[2], 1, totemItem[3], 1, totemItem[4], 1, totemItem[5], 1) }
+            cc_totemMailGuids = {}
+            cc_totemItemGuids = {}
+            for idx = 1, 5 do
+                if totemGuids[idx] ~= nil then
+                    table.insert(cc_totemMailGuids, totemGuids[idx])
+                    if totemItem[idx] ~= 38 then
+                        table.insert(cc_totemItemGuids, totemGuids[idx])
+                    end
+                end
+            end
 
             Data_SQL = nil
             totemsDone = nil
@@ -1679,6 +2095,22 @@ end
 function cc_fixItems()
     local n
     local Data_SQL
+
+    -- SendMail commits asynchronously; wait (up to 5 more seconds) until the mailed items are in the DB
+    local mailedGuids = {}
+    for _, guid in pairs(cc_newItemGuids) do
+        table.insert(mailedGuids, guid)
+    end
+    for _, guid in ipairs(cc_totemMailGuids) do
+        table.insert(mailedGuids, guid)
+    end
+    if not cc_mailItemsCommitted(mailedGuids) and cc_fixItemsAttempts < 5 then
+        cc_fixItemsAttempts = cc_fixItemsAttempts + 1
+        CreateLuaEvent(cc_fixItems, 1000, 1)
+        return
+    end
+    cc_fixItemsAttempts = 0
+
     for n,_ in ipairs(cc_oldItemGuids) do
         QueryString = 'UPDATE `item_instance` AS t1 '
         QueryString = QueryString..'INNER JOIN `item_instance` AS t2 ON t2.guid = '..cc_oldItemGuids[n]..' '
@@ -1722,7 +2154,25 @@ function cc_fixItems()
         end
     end
 
-    local copyingPlayer = GetPlayerByGUID(cc_playerGUID)
+    -- keep the copy mails in the mailbox (core default is 30 days, after which GM mail is deleted with its items)
+    cc_extendMailForItems(cc_newCharacter, mailedGuids)
+
+    -- log what was mailed (with enchants/gems/suffix) so an admin can restore it later
+    if cc_enableMailItemLog then
+        local copyId = cc_nextCopyId()
+        local sourceName = cc_characterNameByGuid(cc_playerGUID)
+        local targetName = cc_newCharacterName or cc_characterNameByGuid(cc_newCharacter)
+        for n,_ in ipairs(cc_oldItemGuids) do
+            cc_logMailedItem(copyId, "copy", cc_playerGUID, sourceName, cc_newCharacter, targetName, cc_oldItemGuids[n], cc_newItemGuids[n], nil, nil)
+        end
+        for _, guid in ipairs(cc_totemItemGuids) do
+            cc_logMailedItem(copyId, "copy", cc_playerGUID, sourceName, cc_newCharacter, targetName, nil, guid, nil, nil)
+        end
+    end
+    cc_totemMailGuids = {}
+    cc_totemItemGuids = {}
+
+    local copyingPlayer = cc_playerGUID ~= nil and GetPlayerByGUID(cc_playerGUID) or nil
     if copyingPlayer ~= nil then
         copyingPlayer:SendBroadcastMessage("Character copy done. You can log out now.")
     end
