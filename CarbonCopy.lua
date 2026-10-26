@@ -45,6 +45,11 @@ local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
 local CC_BAN_REASON_COPY = "CarbonCopy"
 local CC_BAN_REASON_RESTORE = "CarbonCopy restore"
 
+-- While a character is locked, check every 250 ms (up to 15 s) whether it is offline / its mail is saved,
+-- so the lock only lasts as long as the work really takes.
+local CC_POLL_MS = 250
+local CC_POLL_MAX = 60
+
 -- "Never expires" = 2038-01-01. Kept below 2^31 so no signed 32-bit time math (core or client) can overflow it.
 local CC_MAIL_NEVER_EXPIRES = 2145916800
 local cc_unpack = table.unpack or unpack
@@ -721,9 +726,9 @@ local function cc_finishRestore(job)
         table.insert(newGuids, pair.newGuid)
     end
 
-    if not cc_mailItemsCommitted(newGuids) and job.attempts < 5 then
+    if not cc_mailItemsCommitted(newGuids) and job.attempts < CC_POLL_MAX then
         job.attempts = job.attempts + 1
-        CreateLuaEvent(function() cc_finishRestore(job) end, 1000, 1)
+        CreateLuaEvent(function() cc_finishRestore(job) end, CC_POLL_MS, 1)
         return
     end
 
@@ -827,14 +832,14 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
                 local offline = GetPlayerByGUID(targetGuid) == nil and (o == nil or o:GetUInt8(0) == 0)
                 if offline then
                     cc_execRestoreCommand(nil, notify, commandArray, startIdx, admin, true)
-                elseif tries < 15 then
-                    CreateLuaEvent(waitOffline, 1000, 1)
+                elseif tries < CC_POLL_MAX then
+                    CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
                 else
                     notify("RESTORE_NOT_OFFLINE", targetName)
                     cc_liftCarbonCopyBan(targetGuid)
                 end
             end
-            CreateLuaEvent(waitOffline, 2000, 1)
+            CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
             return
         end
     end
@@ -950,7 +955,7 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
 
     cc_restoreBusy[targetGuid] = true
     say("RESTORE_MAILING", #job.pairs, targetName, mode, targetName)
-    CreateLuaEvent(function() cc_finishRestore(job) end, 3000, 1)
+    CreateLuaEvent(function() cc_finishRestore(job) end, CC_POLL_MS, 1)
 end
 
 function cc_CopyCharacter(event, player, command, chatHandler)
@@ -1872,7 +1877,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 cc_newItemGuids[n] = guids[n]
             end
         end
-        CreateLuaEvent(cc_fixItems, 3000) -- do it after 3 seconds
+        CreateLuaEvent(cc_fixItems, CC_POLL_MS, 1) -- as soon as the mails are saved (cc_fixItems polls)
         cc_deleteTempTables(cc_playerGUID)
 
         -- the "copy complete" message and the success log are written by cc_fixItems, once the items are really done
@@ -2048,7 +2053,7 @@ function cc_fixItems()
     local n
     local Data_SQL
 
-    -- SendMail commits asynchronously; wait (up to 5 more seconds) until the mailed items are in the DB
+    -- SendMail commits asynchronously; wait (up to 15 seconds) until the mailed items are in the DB
     local mailedGuids = {}
     for _, guid in pairs(cc_newItemGuids) do
         table.insert(mailedGuids, guid)
@@ -2056,9 +2061,9 @@ function cc_fixItems()
     for _, guid in ipairs(cc_totemMailGuids) do
         table.insert(mailedGuids, guid)
     end
-    if not cc_mailItemsCommitted(mailedGuids) and cc_fixItemsAttempts < 5 then
+    if not cc_mailItemsCommitted(mailedGuids) and cc_fixItemsAttempts < CC_POLL_MAX then
         cc_fixItemsAttempts = cc_fixItemsAttempts + 1
-        CreateLuaEvent(cc_fixItems, 1000, 1)
+        CreateLuaEvent(cc_fixItems, CC_POLL_MS, 1)
         return
     end
     cc_fixItemsAttempts = 0
