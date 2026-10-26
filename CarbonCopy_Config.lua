@@ -52,13 +52,14 @@ Config.minGMRankForRestore = 2
 -- Tickets
 ----------------------------------------------------------------------------------------------------
 
--- Which ticket balance this realm uses:
---   "-1"     = one balance per account, shared by all realms (worldservers using the same Config.customDbName)
---   "1"      = realm 1's own balance
---   "1 2"    = one balance shared by realms 1 and 2 (separate from any other realm)
--- Every worldserver that shares a balance must use exactly the same list. -1 can't be combined with realm ids.
--- Existing balances are given this value the first time the script loads with it; changing it later starts a
--- separate balance for the new list (the old one stays in the table).
+-- Ticket balances are per account and list the realms they are valid on (the realm_ids column). Each worldserver
+-- uses the account's balance that contains its own realm id (from the core), or "-1" (all realms).
+-- This setting is the realm list a NEW balance gets on this worldserver; it must include this realm or be "-1":
+--   "-1"     = valid on every realm (worldservers using the same Config.customDbName)
+--   "1"      = valid on realm 1 only
+--   "1 2"    = one balance shared by realms 1 and 2
+-- -1 can't be combined with realm ids. To change the realms of existing balances use
+-- .carboncopy tickets move (one account with --account, or every balance with a given list).
 Config.ticketRealms = "1"
 
 -- Starter tickets: an account without tickets gets this many when it creates a character or logs in with any character.

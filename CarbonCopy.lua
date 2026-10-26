@@ -55,9 +55,8 @@ local ticket_Cost = CarbonCopyConfig.ticket_Cost
 local cc_carboncopyTable = Config.carboncopyTableName or "carboncopy"
 -- CHECK constraint names must be unique in the whole database on MySQL 8, so the name includes the table name
 local CC_REALM_CHECK = "chk_"..tostring(cc_carboncopyTable).."_realm_ids"
--- Which ticket balance this realm uses (Config.ticketRealms): "-1" = one balance shared by all realms, or a list of
--- realm ids ("1", "1 2") = the balance shared by exactly those realms. Normalised (sorted, single spaces) so every
--- worldserver with the same set uses the same row. "-1" can't be mixed with ids; anything invalid falls back to "-1".
+-- Realm lists (Config.ticketRealms, the realm_ids column, tickets move): "-1" = all realms, or realm ids ("1", "1 2").
+-- Normalised (sorted, single spaces) so the same set is always written the same way. "-1" can't be mixed with ids.
 local function cc_parseTicketRealms(value)
     local text = tostring(value or "-1")
     local ids, seen, hasAll = {}, {}, false
@@ -90,6 +89,10 @@ if CC_TICKET_REALMS == nil then
 end
 -- only digits, spaces and "-1" left after parsing, so it can go into SQL as a quoted literal
 local CC_TICKET_REALMS_SQL = "'"..CC_TICKET_REALMS.."'"
+-- This worldserver's realm id, from the core. A balance applies here when its realm_ids is -1 or contains this id,
+-- so one row can serve several realms ("1 2"). Config.ticketRealms is the list a new balance starts with.
+local CC_REALM_ID = math.floor(tonumber(GetRealmID and GetRealmID() or 1) or 1)
+local CC_MY_BALANCE_SQL = "(`realm_ids` = '-1' OR FIND_IN_SET('"..CC_REALM_ID.."', REPLACE(`realm_ids`, ' ', ',')) > 0)"
 local cc_playerLogsTable = Config.playerLogsTableName or "carboncopy_player_logs"
 local cc_adminLogsTable = Config.adminLogsTableName or "carboncopy_admin_logs"
 local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
@@ -257,6 +260,9 @@ do
     end
     if cc_realmsError ~= nil then
         bad("Config.ticketRealms is invalid ("..cc_realmsError.."), is "..show(Config.ticketRealms or Config.ticketRealm))
+    elseif CC_TICKET_REALMS ~= "-1" and not (" "..CC_TICKET_REALMS.." "):find(" "..CC_REALM_ID.." ", 1, true) then
+        bad("Config.ticketRealms must include this realm (id "..CC_REALM_ID.." from the core) or be \"-1\", is "
+            ..show(Config.ticketRealms or Config.ticketRealm).." - new balances would not be visible on this realm")
     end
     if not isWhole(cc_emptySlotFiller, 0) then
         bad("Config.emptySlotFiller must be 0 or an item id, is "..show(Config.emptySlotFiller))
@@ -343,27 +349,17 @@ end
 if not cc_constraintExists(CC_REALM_CHECK) then
     CharDBQuery('ALTER TABLE '..cc_ticketTableSql..' ADD CONSTRAINT `'..CC_REALM_CHECK..'` CHECK (`realm_ids` = "-1" OR `realm_ids` REGEXP "^[1-9][0-9]*( [1-9][0-9]*)*$");')
 end
--- Warn about realm lists in the table that overlap this one without being the same (a realm in two balances):
--- every worldserver sharing a balance must use exactly the same Config.ticketRealms.
+-- Warn about accounts with more than one balance for this realm (e.g. rows "1" and "1 2"): only one of them is used.
+-- .carboncopy tickets move never creates that; it can come from rows edited by hand or from older versions.
 do
-    local mine = {}
-    for id in CC_TICKET_REALMS:gmatch("%S+") do mine[id] = true end
-    local lists = CharDBQuery('SELECT DISTINCT `realm_ids` FROM '..cc_ticketTableSql..';')
-    if lists ~= nil then
+    local q = CharDBQuery('SELECT `account_id`, GROUP_CONCAT(`realm_ids` ORDER BY `realm_ids` SEPARATOR \'" and "\') FROM '..cc_ticketTableSql
+        ..' WHERE '..CC_MY_BALANCE_SQL..' GROUP BY `account_id` HAVING COUNT(*) > 1 LIMIT 20;')
+    if q ~= nil then
         repeat
-            local other = lists:GetString(0)
-            if other ~= CC_TICKET_REALMS then
-                local overlap = (other == "-1") or (CC_TICKET_REALMS == "-1")
-                for id in other:gmatch("%S+") do
-                    if mine[id] then overlap = true end
-                end
-                if overlap then
-                    PrintError("CarbonCopy: `"..Config.customDbName.."`.`"..cc_carboncopyTable.."`.`realm_ids` has ticket balances for realms \""
-                        ..other.."\", which overlaps this realm's Config.ticketRealms \""..CC_TICKET_REALMS.."\". Worldservers that share "
-                        .."tickets need exactly the same list: change Config.ticketRealms or update those rows.")
-                end
-            end
-        until not lists:NextRow()
+            PrintError("CarbonCopy: account "..q:GetUInt32(0).." has more than one ticket balance for realm "..CC_REALM_ID.." in `"
+                ..Config.customDbName.."`.`"..cc_carboncopyTable.."`.`realm_ids` (\""..q:GetString(1).."\"). Merge them into one row "
+                .."(add the tickets together, delete the other row).")
+        until not q:NextRow()
     end
 end
 
@@ -488,13 +484,27 @@ local function cc_validTicketAmount(text)
     return amount ~= nil and amount == math.floor(amount) and amount >= 0 and amount <= 1000
 end
 
+-- Creates the balance this realm uses for an account that has none yet, with Config.ticketRealms as its realm list.
+-- Starter tickets are per account: only an account without any balance row gets Config.freeTickets, an account that
+-- already has a balance for other realms starts at 0 here. Returns true when it gave the starter tickets.
+local function cc_createBalanceRow(accountId)
+    local T = '`'..Config.customDbName..'`.`'..cc_carboncopyTable..'`'
+    if CharDBQuery('SELECT 1 FROM '..T..' WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;') ~= nil then
+        return false
+    end
+    local fresh = CharDBQuery('SELECT 1 FROM '..T..' WHERE `account_id` = '..accountId..' LIMIT 1;') == nil
+    CharDBQuery('INSERT IGNORE INTO '..T..' (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) '
+        ..'VALUES ('..accountId..', '..(fresh and Config.freeTickets or 0)..', 0, 1, '..CC_TICKET_REALMS_SQL..');')
+    return fresh
+end
+
 -- Adds tickets to (negative: removes them from) what the account has, in one statement, so a copy or another
 -- grant running at the same moment is never overwritten. An account that never used .carboncopy has no row yet;
 -- it owns the starter tickets (Config.freeTickets) it would get on its first use, so the change goes on top of those.
 local function cc_changeTickets(accountId, delta)
-    CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) '
-        ..'VALUES ('..accountId..', '..(Config.freeTickets + delta)..', 0, 1, '..CC_TICKET_REALMS_SQL..') '
-        ..'ON DUPLICATE KEY UPDATE `tickets` = `tickets` + ('..delta..');')
+    cc_createBalanceRow(accountId)
+    CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET `tickets` = `tickets` + ('..delta..') '
+        ..'WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..';')
 end
 
 local function cc_sqlNumber(value)
@@ -530,16 +540,17 @@ end
 -- something else created without them (starter_tickets_given = 0, e.g. tickets credited by a website). Returns true if
 -- it granted them. who / reason only go to the player log.
 local function cc_ensureStarterTickets(accountId, who, reason)
-    local q = CharDBQuery('SELECT `starter_tickets_given` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;')
+    local q = CharDBQuery('SELECT `starter_tickets_given` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;')
     if q ~= nil and q:GetUInt8(0) ~= 0 then
         return false
     end
     if q == nil then
-        CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) '
-            ..'VALUES ('..accountId..', '..Config.freeTickets..', 0, 1, '..CC_TICKET_REALMS_SQL..');')
+        if not cc_createBalanceRow(accountId) then
+            return false   -- the account already has a balance for other realms: no second set of starter tickets
+        end
     else
         CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET `tickets` = GREATEST(`tickets`, LEAST(`tickets` + '
-            ..Config.freeTickets..', '..CC_MAX_TICKETS..')), `starter_tickets_given` = 1 WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' AND `starter_tickets_given` = 0;')
+            ..Config.freeTickets..', '..CC_MAX_TICKETS..')), `starter_tickets_given` = 1 WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' AND `starter_tickets_given` = 0;')
     end
     cc_logPlayer(who and who:GetName() or "console", who and tonumber(tostring(who:GetGUID())) or nil, nil, nil,
         who and who:GetLevel() or nil, nil, nil, CC_STATUS_FREE_CONFIG_TICKET,
@@ -1667,7 +1678,7 @@ end
 -- The account's balance for this realm's list; an account without a row owns the starter tickets.
 local function cc_ticketBalance(accountId)
     local q = CharDBQuery('SELECT `tickets` FROM '..cc_ticketTableSql..' WHERE `account_id` = '..accountId
-        ..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;')
+        ..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;')
     if q ~= nil then
         return q:GetInt32(0)
     end
@@ -1687,12 +1698,54 @@ local function cc_sendTicketsSyntax(say)
     say("SYNTAX_TARGET")
 end
 
+-- Realm lists as sets for tickets move: { all = true } for -1, otherwise { ["1"] = true, ["2"] = true }.
+local function cc_realmSet(list)
+    if list == "-1" then
+        return { all = true }
+    end
+    local set = {}
+    for id in list:gmatch("%S+") do
+        set[id] = true
+    end
+    return set
+end
+
+local function cc_realmsOverlap(a, b)
+    if a.all or b.all then
+        return true
+    end
+    for id in pairs(a) do
+        if b[id] then
+            return true
+        end
+    end
+    return false
+end
+
+-- every realm of a is also in b
+local function cc_realmsInside(a, b)
+    if b.all then
+        return true
+    end
+    if a.all then
+        return false
+    end
+    for id in pairs(a) do
+        if not b[id] then
+            return false
+        end
+    end
+    return true
+end
+
 -- .carboncopy tickets move $fromRealms $toRealms   (GM or console)
--- Moves every account's balance from one realm list to another (e.g. after changing Config.ticketRealms): tickets are
--- added onto an existing balance in the target list, the starter-ticket flag is kept, the old rows are removed.
--- Lists like Config.ticketRealms: -1, 1, or several in quotes "1 2 3". 0 is not a realm.
--- .carboncopy tickets move --account $accountName|--character $name $toRealms: only that account's balance, from this
--- realm's list (Config.ticketRealms). Its balance here becomes 0 (the row stays, so no new starter tickets).
+-- Changes the realm list of every balance whose realm_ids is exactly $fromRealms to $toRealms: the row itself is
+-- updated, no second row. Lists like Config.ticketRealms: -1, 1, or several in quotes "1 2 3". 0 is not a realm.
+-- .carboncopy tickets move --account $accountName|--character $name $toRealms: the same for the one balance that
+-- account uses on this realm.
+-- If the account has other balances for realms in $toRealms, their tickets are added to the moved balance and those
+-- rows are removed, so a realm never sees two balances. A balance that also covers realms outside $toRealms is left
+-- alone (that account is reported and not moved).
 local function cc_execTicketsMove(player, say, command)
     local args = cc_splitQuotedArgs(command)
     local fromArg, toArg, accountId, accountLabel
@@ -1709,7 +1762,13 @@ local function cc_execTicketsMove(player, say, command)
             return
         end
         accountLabel = name
-        fromArg, toArg = CC_TICKET_REALMS, args[nextIdx]
+        local mine = CharDBQuery('SELECT `realm_ids` FROM '..cc_ticketTableSql..' WHERE `account_id` = '..accountId
+            ..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;')
+        if mine == nil then
+            say("TICKETS_MOVE_NONE_ACCOUNT", accountLabel, tostring(CC_REALM_ID))
+            return
+        end
+        fromArg, toArg = mine:GetString(0), args[nextIdx]
     else
         fromArg, toArg = args[4], args[5]
         if fromArg == nil or toArg == nil or args[6] ~= nil then
@@ -1729,14 +1788,14 @@ local function cc_execTicketsMove(player, say, command)
         return
     end
 
-    -- not while a copy runs: its ticket deduction targets this realm's list and could miss the moved balance
+    -- not while a copy runs: its ticket deduction targets this realm's balance and could miss the moved one
     if cc_scriptIsBusy ~= 0 then
         say("ERR_SERVER_BUSY")
         return
     end
 
     local fromSql, toSql = "'"..from.."'", "'"..to.."'"
-    local q = CharDBQuery('SELECT `account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given` FROM '..cc_ticketTableSql
+    local q = CharDBQuery('SELECT `account_id`, `tickets` FROM '..cc_ticketTableSql
         ..' WHERE `realm_ids` = '..fromSql..(accountId and (' AND `account_id` = '..accountId) or '')..';')
     if q == nil then
         if accountId then
@@ -1746,52 +1805,69 @@ local function cc_execTicketsMove(player, say, command)
         end
         return
     end
-    -- one account at a time with plain values (no INSERT ... SELECT on the same table), and the old row is only
-    -- deleted once the new one is confirmed, so a failed statement can't lose a balance
-    local count, failed, movedTickets = 0, 0, 0
+    local rows = {}
     repeat
-        local accountId = q:GetUInt32(0)
-        local tickets = q:IsNull(1) and 0 or q:GetInt32(1)
-        local allow = q:IsNull(2) and 0 or q:GetInt32(2)
-        local given = q:GetUInt8(3)
-        local target = CharDBQuery('SELECT `starter_tickets_given`, `tickets` FROM '..cc_ticketTableSql..' WHERE `account_id` = '..accountId
-            ..' AND `realm_ids` = '..toSql..' LIMIT 1;')
-        local merged
-        if target ~= nil then
-            -- both balances already contain the starter tickets: keep them only once
-            local add = tickets
-            if given ~= 0 and target:GetUInt8(0) ~= 0 then
-                add = math.max(0, tickets - Config.freeTickets)
-            end
-            local targetBefore = target:GetInt32(1)
-            CharDBQuery('UPDATE '..cc_ticketTableSql..' SET `tickets` = `tickets` + '..add..', `starter_tickets_given` = GREATEST(`starter_tickets_given`, '
-                ..given..') WHERE `account_id` = '..accountId..' AND `realm_ids` = '..toSql..';')
-            -- the UPDATE applied when the target balance went up by 'add' (nothing to check when add is 0)
-            local check = CharDBQuery('SELECT `tickets` FROM '..cc_ticketTableSql..' WHERE `account_id` = '..accountId
-                ..' AND `realm_ids` = '..toSql..' LIMIT 1;')
-            merged = add == 0 or (check ~= nil and check:GetInt32(0) >= targetBefore + add)
-        else
-            CharDBQuery('INSERT INTO '..cc_ticketTableSql..' (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) VALUES ('
-                ..accountId..', '..tickets..', '..allow..', '..given..', '..toSql..');')
+        table.insert(rows, { account = q:GetUInt32(0), tickets = q:IsNull(1) and 0 or q:GetInt32(1) })
+    until not q:NextRow()
+
+    local toSet = cc_realmSet(to)
+    local count, failed, movedTickets = 0, 0, 0
+    for _, row in ipairs(rows) do
+        local acc = row.account
+        local where = ' WHERE `account_id` = '..acc..' AND `realm_ids` = '
+        -- the account's other balances that cover realms of the new list: merged into this one
+        local merge, mergeTickets, mergeFlag, blockedBy = {}, 0, 0, nil
+        local others = CharDBQuery('SELECT `realm_ids`, `tickets`, `starter_tickets_given` FROM '..cc_ticketTableSql
+            ..' WHERE `account_id` = '..acc..' AND `realm_ids` <> '..fromSql..';')
+        if others ~= nil then
+            repeat
+                local list = others:GetString(0)
+                local set = cc_realmSet(list)
+                if cc_realmsOverlap(set, toSet) then
+                    if cc_realmsInside(set, toSet) then
+                        table.insert(merge, "'"..list.."'")
+                        mergeTickets = mergeTickets + (others:IsNull(1) and 0 or others:GetInt32(1))
+                        mergeFlag = math.max(mergeFlag, others:GetUInt8(2))
+                    else
+                        blockedBy = list
+                    end
+                end
+            until not others:NextRow()
         end
-        if merged == nil then
-            merged = CharDBQuery('SELECT 1 FROM '..cc_ticketTableSql..' WHERE `account_id` = '..accountId..' AND `realm_ids` = '..toSql..' LIMIT 1;') ~= nil
+
+        local ok = blockedBy == nil
+        if not ok then
+            PrintError("CarbonCopy: tickets move: account "..acc.." also has a balance for realms \""..blockedBy.."\", which overlaps \""
+                ..to.."\" but covers other realms too. Not moved: merge or change that row first.")
         end
-        if merged then
-            if accountLabel then
-                -- one account: this realm keeps a 0 balance with the starter flag set, so it gets no new starter tickets
-                CharDBQuery('UPDATE '..cc_ticketTableSql..' SET `tickets` = 0, `starter_tickets_given` = 1 WHERE `account_id` = '
-                    ..accountId..' AND `realm_ids` = '..fromSql..';')
+        if ok and #merge > 0 then
+            -- add the merged tickets first and confirm, then remove the merged rows (a failure never loses tickets)
+            CharDBQuery('UPDATE '..cc_ticketTableSql..' SET `tickets` = `tickets` + '..mergeTickets..', `starter_tickets_given` = GREATEST(`starter_tickets_given`, '
+                ..mergeFlag..')'..where..fromSql..';')
+            local check = CharDBQuery('SELECT `tickets` FROM '..cc_ticketTableSql..where..fromSql..' LIMIT 1;')
+            ok = mergeTickets == 0 or (check ~= nil and check:GetInt32(0) >= row.tickets + mergeTickets)
+            if ok then
+                CharDBQuery('DELETE FROM '..cc_ticketTableSql..' WHERE `account_id` = '..acc..' AND `realm_ids` IN ('..table.concat(merge, ', ')..');')
             else
-                CharDBQuery('DELETE FROM '..cc_ticketTableSql..' WHERE `account_id` = '..accountId..' AND `realm_ids` = '..fromSql..';')
+                PrintError("CarbonCopy: tickets move: the tickets of account "..acc.." could not be merged, see the SQL error above. Not moved.")
             end
+        end
+        if ok then
+            CharDBQuery('UPDATE '..cc_ticketTableSql..' SET `realm_ids` = '..toSql..where..fromSql..';')
+            ok = CharDBQuery('SELECT 1 FROM '..cc_ticketTableSql..where..fromSql..' LIMIT 1;') == nil
+                and CharDBQuery('SELECT 1 FROM '..cc_ticketTableSql..where..toSql..' LIMIT 1;') ~= nil
+            if not ok then
+                PrintError("CarbonCopy: tickets move: the realms of account "..acc.."'s balance could not be changed from \""..from.."\" to \""
+                    ..to.."\", see the SQL error above."..(#merge > 0 and " Its merged tickets were already added to the \""..from.."\" balance." or ""))
+            end
+        end
+        if ok then
             count = count + 1
-            movedTickets = tickets
+            movedTickets = row.tickets + mergeTickets
         else
             failed = failed + 1
-            PrintError("CarbonCopy: tickets move: account "..accountId.." could not be moved from realms \""..from.."\" to \""..to.."\", see the SQL error above.")
         end
-    until not q:NextRow()
+    end
 
     if failed > 0 then
         say("TICKETS_MOVE_PARTIAL", failed, from)
@@ -1800,8 +1876,11 @@ local function cc_execTicketsMove(player, say, command)
     if accountLabel then
         if count > 0 then
             say("TICKETS_MOVE_DONE_ACCOUNT", accountLabel, movedTickets, from, to)
-            cc_logAdmin(adminName, adminGuid, accountLabel, nil, nil, CC_ACTION_GM_MOVE, movedTickets, 0, CC_STATUS_SUCCESS,
-                "Moved "..accountLabel.."'s ticket balance from realms \""..from.."\" to \""..to.."\"")
+            if not toSet.all and not toSet[tostring(CC_REALM_ID)] then
+                say("TICKETS_MOVE_LEFT_REALM", CC_REALM_ID, to, accountLabel)
+            end
+            cc_logAdmin(adminName, adminGuid, accountLabel, nil, nil, CC_ACTION_GM_MOVE, movedTickets, movedTickets, CC_STATUS_SUCCESS,
+                "Changed "..accountLabel.."'s ticket balance from realms \""..from.."\" to \""..to.."\"")
         end
         return
     end
@@ -1810,7 +1889,7 @@ local function cc_execTicketsMove(player, say, command)
         say("TICKETS_MOVE_STILL_USING", from)
     end
     cc_logAdmin(adminName, adminGuid, nil, nil, nil,
-        CC_ACTION_GM_MOVE, nil, nil, CC_STATUS_SUCCESS, "Moved "..count.." ticket balance(s) from realms \""..from.."\" to \""..to.."\"")
+        CC_ACTION_GM_MOVE, nil, nil, CC_STATUS_SUCCESS, "Changed "..count.." ticket balance(s) from realms \""..from.."\" to \""..to.."\"")
 end
 
 -- .carboncopy tickets lookup|add|remove $target [$amount] and tickets move   (GM or console; the caller checks the rank)
@@ -2071,18 +2150,18 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         -- print the available tickets
         local accountId = player:GetAccountId()
         cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-        local _ticketsAtEntrySQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;')
+        local _ticketsAtEntrySQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;')
         local ticketsAtEntry = _ticketsAtEntrySQL ~= nil and _ticketsAtEntrySQL:GetInt32(0) or Config.freeTickets
         _ticketsAtEntrySQL = nil
         if commandArray[2] == nil then
             local Data_SQL
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;');
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;');
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetInt32(0)
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), oldTickets, oldTickets, CC_STATUS_SUCCESS, "Ticket balance lookup")
             else
                 oldTickets = Config.freeTickets
-                CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) VALUES ('..accountId..', '..Config.freeTickets..', 0, 1, '..CC_TICKET_REALMS_SQL..');')
+                cc_createBalanceRow(accountId)
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), 0, Config.freeTickets, CC_STATUS_FREE_CONFIG_TICKET, "Free config ticket granted")
             end
             -- ticket cost list and map warning first, the most important lines last
@@ -2209,14 +2288,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         --check for available tickets
         cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-        local Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..';');
+        local Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..';');
         local availableTickets
         local requiredTickets
         if Data_SQL ~= nil then
             availableTickets = Data_SQL:GetInt32(0)
             Data_SQL = nil
         else
-            CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) VALUES ('..accountId..', '..Config.freeTickets..', 0, 1, '..CC_TICKET_REALMS_SQL..');')
+            cc_createBalanceRow(accountId)
             availableTickets = Config.freeTickets
         end
 
@@ -2373,7 +2452,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
         -- only if the balance still covers it (another worldserver sharing the balance, or a GM, may have used it since
         -- the check): read, deduct conditionally, read again - the deduction applied when the balance dropped by the cost
-        local balanceWhere = ' WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL
+        local balanceWhere = ' WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL
         local before = CharDBQuery('SELECT `tickets` FROM '..cc_ticketTableSql..balanceWhere..' LIMIT 1;')
         before = before and before:GetInt32(0) or nil
         if before == nil or before < requiredTickets then
@@ -2676,7 +2755,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = nil
             local Data_SQL
             cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;');
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;');
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetInt32(0)
             else
@@ -2723,7 +2802,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = nil
             local Data_SQL
             cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;');
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;');
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetInt32(0)
             else
@@ -2766,7 +2845,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-        Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..' LIMIT 1;');
+        Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' LIMIT 1;');
         if Data_SQL  ~= nil then
             oldTickets = Data_SQL:GetInt32(0)
         else
@@ -2800,7 +2879,7 @@ function cc_copyFailed(stage, err)
         local refunded = 0
         if cc_copyAccountId ~= nil and (cc_copyCharged or 0) > 0 and not cc_copyMailed then
             CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets + '..cc_copyCharged
-                ..' WHERE `account_id` = '..cc_copyAccountId..' AND `realm_ids` = '..CC_TICKET_REALMS_SQL..';')
+                ..' WHERE `account_id` = '..cc_copyAccountId..' AND '..CC_MY_BALANCE_SQL..';')
             refunded = cc_copyCharged
             if cc_newCharacter ~= nil and cc_newCharacter ~= 0 then
                 -- the new character may already have the copied level, spells, reputation...: it stays locked (10 years,

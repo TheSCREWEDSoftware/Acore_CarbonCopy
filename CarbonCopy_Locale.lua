@@ -619,15 +619,28 @@ L.TICKETS_MOVE_NONE_ACCOUNT = {
 
 -- %s = account or character name, %d = tickets moved, %s = from list, %s = to list
 L.TICKETS_MOVE_DONE_ACCOUNT = {
-    [0] = "Moved the ticket balance of %s (%d tickets) from realms \"%s\" to \"%s\". Its balance here is now 0.",
-    [1] = "%s의 티켓 잔액(티켓 %d개)을 렐름 \"%s\"에서 \"%s\"(으)로 옮겼습니다. 이곳의 잔액은 이제 0입니다.",
-    [2] = "Solde de tickets de %s (%d tickets) déplacé des royaumes \"%s\" vers \"%s\". Son solde ici est maintenant de 0.",
-    [3] = "Ticketguthaben von %s (%d Tickets) von den Realms \"%s\" nach \"%s\" verschoben. Das Guthaben hier ist jetzt 0.",
-    [4] = "已将 %s 的票券余额（%d 张）从服务器 \"%s\" 移到 \"%s\"。此处余额现为 0。",
-    [5] = "已將 %s 的票券餘額（%d 張）從伺服器 \"%s\" 移到 \"%s\"。此處餘額現為 0。",
-    [6] = "Saldo de tickets de %s (%d tickets) movido de los reinos \"%s\" a \"%s\". Su saldo aquí ahora es 0.",
-    [7] = "Saldo de tickets de %s (%d tickets) movido de los reinos \"%s\" a \"%s\". Su saldo aquí ahora es 0.",
-    [8] = "Баланс жетонов %s (%d шт.) перенесён из миров \"%s\" в \"%s\". Здесь баланс теперь 0.",
+    [0] = "Changed the ticket balance of %s (%d tickets) from realms \"%s\" to \"%s\".",
+    [1] = "%s의 티켓 잔액(티켓 %d개)을 렐름 \"%s\"에서 \"%s\"(으)로 변경했습니다.",
+    [2] = "Solde de tickets de %s (%d tickets) changé des royaumes \"%s\" vers \"%s\".",
+    [3] = "Ticketguthaben von %s (%d Tickets) von den Realms \"%s\" auf \"%s\" geändert.",
+    [4] = "已将 %s 的票券余额（%d 张）从服务器 \"%s\" 改为 \"%s\"。",
+    [5] = "已將 %s 的票券餘額（%d 張）從伺服器 \"%s\" 改為 \"%s\"。",
+    [6] = "Saldo de tickets de %s (%d tickets) cambiado de los reinos \"%s\" a \"%s\".",
+    [7] = "Saldo de tickets de %s (%d tickets) cambiado de los reinos \"%s\" a \"%s\".",
+    [8] = "Баланс жетонов %s (%d шт.) переведён с миров \"%s\" на \"%s\".",
+}
+
+-- %d = this realm id, %s = new realm list, %s = account or character name
+L.TICKETS_MOVE_LEFT_REALM = {
+    [0] = "Realm %d isn't in \"%s\" any more: %s has no tickets on this realm now.",
+    [1] = "렐름 %d은(는) 더 이상 \"%s\"에 없습니다. %s은(는) 이제 이 렐름에 티켓이 없습니다.",
+    [2] = "Le royaume %d n'est plus dans \"%s\" : %s n'a plus de tickets sur ce royaume.",
+    [3] = "Realm %d ist nicht mehr in \"%s\": %s hat auf diesem Realm jetzt keine Tickets.",
+    [4] = "服务器 %d 已不在 \"%s\" 中：%s 在此服务器上已没有票券。",
+    [5] = "伺服器 %d 已不在 \"%s\" 中：%s 在此伺服器上已沒有票券。",
+    [6] = "El reino %d ya no está en \"%s\": %s ya no tiene tickets en este reino.",
+    [7] = "El reino %d ya no está en \"%s\": %s ya no tiene tickets en este reino.",
+    [8] = "Мир %d больше не входит в \"%s\": у %s теперь нет жетонов на этом мире.",
 }
 
 -- %s = why the realm list is invalid
@@ -671,15 +684,15 @@ L.TICKETS_MOVE_NONE = {
 
 -- %d = accounts, %s = from list, %s = to list
 L.TICKETS_MOVE_DONE = {
-    [0] = "Moved the ticket balances of %d account(s) from realms \"%s\" to \"%s\".",
-    [1] = "계정 %d개의 티켓 잔액을 렐름 \"%s\"에서 \"%s\"(으)로 옮겼습니다.",
-    [2] = "Soldes de tickets de %d compte(s) déplacés des royaumes \"%s\" vers \"%s\".",
-    [3] = "Ticketguthaben von %d Account(s) von den Realms \"%s\" nach \"%s\" verschoben.",
-    [4] = "已将 %d 个账号的票券余额从服务器 \"%s\" 移到 \"%s\"。",
-    [5] = "已將 %d 個帳號的票券餘額從伺服器 \"%s\" 移到 \"%s\"。",
-    [6] = "Saldos de tickets de %d cuenta(s) movidos de los reinos \"%s\" a \"%s\".",
-    [7] = "Saldos de tickets de %d cuenta(s) movidos de los reinos \"%s\" a \"%s\".",
-    [8] = "Балансы жетонов %d учётн. записей перенесены из миров \"%s\" в \"%s\".",
+    [0] = "Changed the ticket balances of %d account(s) from realms \"%s\" to \"%s\".",
+    [1] = "계정 %d개의 티켓 잔액을 렐름 \"%s\"에서 \"%s\"(으)로 변경했습니다.",
+    [2] = "Soldes de tickets de %d compte(s) changés des royaumes \"%s\" vers \"%s\".",
+    [3] = "Ticketguthaben von %d Account(s) von den Realms \"%s\" auf \"%s\" geändert.",
+    [4] = "已将 %d 个账号的票券余额从服务器 \"%s\" 改为 \"%s\"。",
+    [5] = "已將 %d 個帳號的票券餘額從伺服器 \"%s\" 改為 \"%s\"。",
+    [6] = "Saldos de tickets de %d cuenta(s) cambiados de los reinos \"%s\" a \"%s\".",
+    [7] = "Saldos de tickets de %d cuenta(s) cambiados de los reinos \"%s\" a \"%s\".",
+    [8] = "Балансы жетонов %d учётн. записей переведены с миров \"%s\" на \"%s\".",
 }
 
 -- %d = accounts not moved, %s = from list
@@ -697,15 +710,15 @@ L.TICKETS_MOVE_PARTIAL = {
 
 -- %s = realm list
 L.TICKETS_MOVE_STILL_USING = {
-    [0] = "This realm still uses \"%s\" (Config.ticketRealms): change it and reload ALE, or new balances start there again.",
-    [1] = "이 렐름은 아직 \"%s\"를 사용합니다 (Config.ticketRealms). 설정을 바꾸고 ALE를 다시 불러오지 않으면 새 잔액이 다시 그곳에서 시작됩니다.",
-    [2] = "Ce royaume utilise encore \"%s\" (Config.ticketRealms) : modifiez-le et rechargez ALE, sinon de nouveaux soldes y recommenceront.",
-    [3] = "Dieser Realm verwendet noch \"%s\" (Config.ticketRealms): Ändere es und lade ALE neu, sonst beginnen dort wieder neue Guthaben.",
-    [4] = "此服务器仍在使用 \"%s\"（Config.ticketRealms）：请修改并重新加载 ALE，否则新的余额会再次从那里开始。",
-    [5] = "此伺服器仍在使用 \"%s\"（Config.ticketRealms）：請修改並重新載入 ALE，否則新的餘額會再次從那裡開始。",
-    [6] = "Este reino todavía usa \"%s\" (Config.ticketRealms): cámbialo y recarga ALE, o los nuevos saldos volverán a empezar ahí.",
-    [7] = "Este reino todavía usa \"%s\" (Config.ticketRealms): cámbialo y recarga ALE, o los nuevos saldos volverán a empezar ahí.",
-    [8] = "Этот мир всё ещё использует \"%s\" (Config.ticketRealms): измените его и перезагрузите ALE, иначе новые балансы снова начнутся там.",
+    [0] = "New balances on this realm still start with realms \"%s\" (Config.ticketRealms): change it and reload ALE if they should use the new list.",
+    [1] = "이 렐름의 새 잔액은 여전히 렐름 \"%s\"(Config.ticketRealms)로 시작합니다. 새 목록을 쓰려면 변경 후 ALE를 다시 불러오세요.",
+    [2] = "Les nouveaux soldes de ce royaume commencent toujours avec les royaumes \"%s\" (Config.ticketRealms) : changez-le et rechargez ALE s'ils doivent utiliser la nouvelle liste.",
+    [3] = "Neue Guthaben auf diesem Realm beginnen weiterhin mit den Realms \"%s\" (Config.ticketRealms): ändere es und lade ALE neu, wenn sie die neue Liste nutzen sollen.",
+    [4] = "此服务器的新余额仍以服务器 \"%s\"（Config.ticketRealms）开始：如需使用新列表，请修改并重新加载 ALE。",
+    [5] = "此伺服器的新餘額仍以伺服器 \"%s\"（Config.ticketRealms）開始：如需使用新列表，請修改並重新載入 ALE。",
+    [6] = "Los saldos nuevos de este reino siguen empezando con los reinos \"%s\" (Config.ticketRealms): cámbialo y recarga ALE si deben usar la lista nueva.",
+    [7] = "Los saldos nuevos de este reino siguen empezando con los reinos \"%s\" (Config.ticketRealms): cámbialo y recarga ALE si deben usar la lista nueva.",
+    [8] = "Новые балансы на этом мире по-прежнему создаются для миров \"%s\" (Config.ticketRealms): измените и перезагрузите ALE, если нужен новый список.",
 }
 
 -- ---------------------------------------------------------------------------
@@ -1140,8 +1153,8 @@ L.SYNTAX_CONFIG           = { [0] = "Syntax: .carboncopy config" }
 L.SYNTAX_TICKETS_LOOKUP   = { [0] = "Syntax: .carboncopy tickets lookup $characterName" }
 L.SYNTAX_TICKETS_ADD      = { [0] = "Syntax: .carboncopy tickets add $characterName $amount" }
 L.SYNTAX_TICKETS_REMOVE   = { [0] = "Syntax: .carboncopy tickets remove $characterName $amount" }
-L.SYNTAX_TICKETS_MOVE     = { [0] = "Syntax: .carboncopy tickets move $fromRealms $toRealms   (-1, 1, or several in quotes \"1 2 3\"; moves every balance)" }
-L.SYNTAX_TICKETS_MOVE_ACCOUNT = { [0] = "Syntax: .carboncopy tickets move --account $accountName $toRealms   (or --character $characterName; moves that account's balance from this realm, which keeps 0)" }
+L.SYNTAX_TICKETS_MOVE     = { [0] = "Syntax: .carboncopy tickets move $fromRealms $toRealms   (every balance whose realms are exactly $fromRealms gets $toRealms; -1, 1, or several in quotes \"1 2 3\")" }
+L.SYNTAX_TICKETS_MOVE_ACCOUNT = { [0] = "Syntax: .carboncopy tickets move --account $accountName $toRealms   (or --character $characterName; the balance that account uses here gets $toRealms)" }
 L.SYNTAX_TARGET           = { [0] = "        $characterName can also be --character $characterName, or --account $accountName (restore / revoke: every character of the account)" }
 L.SYNTAX_LOGS             = { [0] = "Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]" }
 L.SYNTAX_RESTORE_LIST     = { [0] = "Syntax: .carboncopy restore $characterName                                   (list mailed items and where they are now)" }
