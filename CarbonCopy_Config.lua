@@ -47,8 +47,8 @@ Config.minGMRankForRestore = 2
 -- Tickets
 ----------------------------------------------------------------------------------------------------
 
--- Starter tickets: an account gets this many when it creates a character and has no tickets yet (accounts from before
--- that get them on their first .carboncopy). Changing it only affects accounts that haven't received them yet.
+-- Starter tickets: an account without tickets gets this many when it creates a character or logs in with any character.
+-- Changing it only affects accounts that haven't received them yet; existing balances are never touched.
 Config.freeTickets = 4
 
 -- "single" = every copy costs 1 ticket. "level" = the cost depends on the level (ticket_Cost below).

@@ -2694,20 +2694,24 @@ if cc_enableMailItemLog and cc_mailLogRetentionDays > 0 then
     CreateLuaEvent(cc_autoCleanup, 86400000, 0)
 end
 
--- Starter tickets are the account's from its first character on: when a character is created, an account without a
--- ticket row gets Config.freeTickets as it is at that moment. Existing balances are never touched. (Accounts that had
--- characters before this existed still get them on their first .carboncopy, a missing row counts as the starter tickets.)
+-- Starter tickets belong to the account. Whenever the account creates a character (character screen) or enters the
+-- world with any character, an account without a ticket row gets Config.freeTickets as it is at that moment.
+-- Existing balances are never touched. (mod-ale has no account-login event, and at the character screen there is no
+-- player to tell which account it is, so these two are the account checks Lua can do.)
 local PLAYER_EVENT_ON_CHARACTER_CREATE = 1
-local function cc_OnCharacterCreate(event, player)
+local PLAYER_EVENT_ON_LOGIN = 3
+local function cc_grantStarterTickets(event, player)
     local accountId = player:GetAccountId()
     local q = CharDBQuery('SELECT 1 FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;')
     if q == nil then
         CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0);')
         cc_logPlayer(player:GetName(), tonumber(tostring(player:GetGUID())), nil, nil, player:GetLevel(), 0, Config.freeTickets,
-            CC_STATUS_FREE_CONFIG_TICKET, "Starter tickets granted at character creation")
+            CC_STATUS_FREE_CONFIG_TICKET, event == PLAYER_EVENT_ON_CHARACTER_CREATE and "Starter tickets granted at character creation"
+            or "Starter tickets granted at login")
     end
 end
 
 RegisterPlayerEvent(PLAYER_EVENT_ON_COMMAND, cc_CopyCharacter)
-RegisterPlayerEvent(PLAYER_EVENT_ON_CHARACTER_CREATE, cc_OnCharacterCreate)
+RegisterPlayerEvent(PLAYER_EVENT_ON_CHARACTER_CREATE, cc_grantStarterTickets)
+RegisterPlayerEvent(PLAYER_EVENT_ON_LOGIN, cc_grantStarterTickets)
 RegisterPlayerEvent(PLAYER_EVENT_ON_LOGOUT, cc_OnPlayerLogout)
