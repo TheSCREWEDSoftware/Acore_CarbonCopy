@@ -175,8 +175,8 @@ cc_copyStartedAt = nil      -- os.time() the running copy started, for the watch
 
 -- If module runs for the first time, create the db specified in Config.dbName and add the "carboncopy" table to it.
 ----------------------------------------------------------------------------------------------------
--- Config check: CarbonCopy refuses to load with settings it can't work with, and lists every problem at once.
--- (A Lua error while loading stops this file, so no command or event below gets registered.)
+-- Config check (ASSERT): CarbonCopy refuses to load with settings it can't work with, and lists every problem at once.
+-- A failed assert while loading stops this file, so no command or event below gets registered.
 ----------------------------------------------------------------------------------------------------
 do
     local problems = {}
@@ -264,9 +264,9 @@ do
         end
     end
 
-    if #problems > 0 then
-        error("CarbonCopy NOT loaded, fix CarbonCopy_Config.lua and reload ALE:\n  - "..table.concat(problems, "\n  - "), 0)
-    end
+    -- ASSERT: stops this file here (ALE prints the message and a stack trace); the world server keeps running
+    assert(#problems == 0, "[CarbonCopy] ASSERT FAILED - ERROR in CarbonCopy_Config.lua, CarbonCopy NOT loaded. "
+        .."Fix these and run .reload ale:\n  - "..table.concat(problems, "\n  - "))
 end
 
 CharDBQuery('CREATE DATABASE IF NOT EXISTS `'..Config.customDbName..'`;');
