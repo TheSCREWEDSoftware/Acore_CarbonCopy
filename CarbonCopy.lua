@@ -10,6 +10,7 @@
 ------------------------------------------------------------------------------------------------
 -- ADMIN GUIDE:  -  compile the core with ElunaLua module
 --               -  adjust config in Acore_CarbonCopy/CarbonCopy_Config.lua
+--               -  adjust texts / translations in Acore_CarbonCopy/CarbonCopy_Locale.lua
 --               -  add this script to ../lua_scripts/
 --               -  grant account related tickets in the `carboncopy` table
 -- PLAYER USAGE: 1) create a new character with same class/race as the one to copy in the same account. Do NOT log it in
@@ -18,6 +19,7 @@
 ------------------------------------------------------------------------------------------------
 
 local CarbonCopyConfig = require("CarbonCopy_Config")
+local L = require("CarbonCopy_Locale")
 local Config = CarbonCopyConfig.Config
 local cc_maps = CarbonCopyConfig.cc_maps
 local ticket_Cost = CarbonCopyConfig.ticket_Cost
@@ -34,6 +36,10 @@ local cc_mailExpireDays = tonumber(Config.mailExpireDays) or 0
 local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
 
 local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
+-- 0 = empty slots / missing totems send nothing. An item entry (38 = Recruit's Shirt) = old behaviour, pad the mails with it.
+local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 0
+-- Signs the copy / restore mails (the rest of the mail text is in CarbonCopy_Locale.lua)
+local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
 
 -- Ban reasons used to lock a character during a copy / restore; only bans with these reasons are lifted by the script.
 local CC_BAN_REASON_COPY = "CarbonCopy"
@@ -59,6 +65,7 @@ cc_totemMailGuids = {}      -- every item guid in the shaman totem mail (fillers
 cc_totemItemGuids = {}      -- only the real totems, used for the mailed-items log
 cc_fixItemsAttempts = 0
 cc_restoreBusy = {}         -- target guid -> true while a restore for that character is being finalised
+cc_copyLocale = 0           -- locale of the copying player, used for the copy mails
 
 -- If module runs for the first time, create the db specified in Config.dbName and add the "carboncopy" table to it.
 CharDBQuery('CREATE DATABASE IF NOT EXISTS `'..Config.customDbName..'`;');
@@ -255,7 +262,7 @@ local function cc_formatDisplayValue(value)
 end
 
 local function cc_execConfigCommand(chatHandler)
-    chatHandler:SendSysMessage("===== CarbonCopy configuration =====")
+    chatHandler:SendSysMessage(cc_t(nil, "CONFIG_HEADER"))
 
     for _, key in ipairs(cc_sortedKeys(Config)) do
         local value = Config[key]
@@ -267,7 +274,7 @@ local function cc_execConfigCommand(chatHandler)
     cc_sendTableDump(chatHandler, "  cc_maps:", cc_maps)
     cc_sendTableDump(chatHandler, "  ticket_Cost:", ticket_Cost)
 
-    chatHandler:SendSysMessage("===================================")
+    chatHandler:SendSysMessage(cc_t(nil, "CONFIG_FOOTER"))
 end
 
 -- cc_execLogsCommand: shared handler for ".carboncopy logs" from console or GM.
@@ -275,15 +282,9 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
     -- Help subcommand
     local firstArg = commandArray[startIdx] and string.lower(commandArray[startIdx]) or nil
     if firstArg == "help" or firstArg == "--help" then
-        chatHandler:SendSysMessage("===== .carboncopy logs flags (all optional) =====")
-        chatHandler:SendSysMessage("  --source  name|guid   filter by source name or GUID")
-        chatHandler:SendSysMessage("  --target  name|guid   filter by target name or GUID")
-        chatHandler:SendSysMessage("  --day     YYYY-MM-DD  entries from this date only")
-        chatHandler:SendSysMessage("  --code    N           filter by status code:")
-        chatHandler:SendSysMessage("                          0=free ticket  1=success  2=failed")
-        chatHandler:SendSysMessage("  --limit   N           max rows 1-100 (default 20)")
-        chatHandler:SendSysMessage("  --oldest              sort oldest-first (default: newest)")
-        chatHandler:SendSysMessage("================================================")
+        for _, line in ipairs(L.LOGS_HELP[0]) do
+            chatHandler:SendSysMessage(line)
+        end
         return
     end
 
@@ -314,7 +315,7 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
                 if n ~= nil and n >= 0 then
                     filterCode = math.floor(n)
                 else
-                    chatHandler:SendSysMessage("--code must be a non-negative number. Code filter ignored.")
+                    chatHandler:SendSysMessage(cc_t(nil, "LOGS_BAD_CODE"))
                 end
             end
         elseif flag == "--limit" then
@@ -324,13 +325,13 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
                 if n ~= nil and n >= 1 and n <= 100 then
                     limitN = math.floor(n)
                 else
-                    chatHandler:SendSysMessage("--limit must be 1-100. Using default 20.")
+                    chatHandler:SendSysMessage(cc_t(nil, "LOGS_BAD_LIMIT"))
                 end
             end
         elseif flag == "--oldest" then
             orderOldest = true
         else
-            chatHandler:SendSysMessage("Unknown flag: "..commandArray[i]..". Use 'help' or '--help' for usage.")
+            chatHandler:SendSysMessage(cc_t(nil, "LOGS_UNKNOWN_FLAG", commandArray[i]))
             parseError = true
             break
         end
@@ -363,7 +364,7 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
         if filterDay:match("^%d%d%d%d%-%d%d%-%d%d$") then
             table.insert(conditions, 'DATE(`created_at`) = '..cc_sqlQuote(filterDay))
         else
-            chatHandler:SendSysMessage("--day must be YYYY-MM-DD. Day filter ignored.")
+            chatHandler:SendSysMessage(cc_t(nil, "LOGS_BAD_DAY"))
         end
     end
 
@@ -390,15 +391,15 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
     local filterSummary = (#activeFilters > 0) and table.concat(activeFilters, "  ") or "none"
 
     -- Header
-    chatHandler:SendSysMessage("========== CarbonCopy Player Logs ==========")
-    chatHandler:SendSysMessage("Filters: "..filterSummary.."  |  limit:"..limitN.."  |  "..(orderOldest and "oldest first" or "newest first"))
-    chatHandler:SendSysMessage("  Time (MM-DD HH:MM)  Source (guid) [lv]  ->  Target (guid)  tix:before=>after  Reason")
-    chatHandler:SendSysMessage("--------------------------------------------")
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_TITLE"))
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_FILTERS", filterSummary, limitN, cc_t(nil, orderOldest and "LOGS_OLDEST_FIRST" or "LOGS_NEWEST_FIRST")))
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_COLUMNS"))
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_RULE"))
 
     local rows = CharDBQuery(sql)
     if rows == nil then
-        chatHandler:SendSysMessage("  (no entries found matching the filters)")
-        chatHandler:SendSysMessage("============================================")
+        chatHandler:SendSysMessage(cc_t(nil, "LOGS_NONE"))
+        chatHandler:SendSysMessage(cc_t(nil, "LOGS_END"))
         return
     end
 
@@ -438,146 +439,34 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
         count = count + 1
     until not rows:NextRow()
 
-    chatHandler:SendSysMessage("--------------------------------------------")
-    chatHandler:SendSysMessage(count.." result(s)  |  limit "..limitN.."  |  "..(orderOldest and "oldest first" or "newest first"))
-    chatHandler:SendSysMessage("============================================")
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_RULE"))
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_SUMMARY", count, limitN, cc_t(nil, orderOldest and "LOGS_OLDEST_FIRST" or "LOGS_NEWEST_FIRST")))
+    chatHandler:SendSysMessage(cc_t(nil, "LOGS_END"))
 end
 
--- Player-facing texts for .carboncopy (no arguments), per client locale.
--- Locale IDs from player:GetDbcLocale(): 0=enUS 1=koKR 2=frFR 3=deDE 4=zhCN 5=zhTW 6=esES 7=esMX 8=ruRU
--- [0] (English) is used when a locale has no translation.
-local cc_infoText = {
-    TICKETS = {
-        [0] = "You currently have %d tickets available for CarbonCopy.",
-        [1] = "현재 CarbonCopy 티켓이 %d개 있습니다.",
-        [2] = "Vous disposez actuellement de %d tickets CarbonCopy.",
-        [3] = "Du hast derzeit %d CarbonCopy-Tickets.",
-        [4] = "你当前拥有 %d 张 CarbonCopy 票券。",
-        [5] = "你目前擁有 %d 張 CarbonCopy 票券。",
-        [6] = "Actualmente tienes %d tickets de CarbonCopy.",
-        [7] = "Actualmente tienes %d tickets de CarbonCopy.",
-        [8] = "У вас %d жетонов CarbonCopy.",
-    },
-    USAGE = {
-        [0] = "To copy this character: create a new character of the same race and class on this account (do NOT log it in), then type .carboncopy NewCharacterName while logged in on this character. You will be prompted when you can log in.",
-        [1] = "이 캐릭터를 복사하려면: 같은 계정에 같은 종족과 직업의 새 캐릭터를 만드세요 (접속하지 마세요). 그다음 이 캐릭터로 접속한 상태에서 .carboncopy 새캐릭터이름 을 입력하세요. 접속해도 될 때 안내 메시지가 표시됩니다.",
-        [2] = "Pour copier ce personnage : créez un nouveau personnage de même race et classe sur ce compte (ne vous connectez PAS avec), puis tapez .carboncopy NomDuNouveauPersonnage en étant connecté sur ce personnage. Un message vous indiquera quand vous pourrez vous connecter.",
-        [3] = "So kopierst du diesen Charakter: Erstelle auf diesem Account einen neuen Charakter mit gleicher Rasse und Klasse (NICHT einloggen), dann tippe .carboncopy NeuerCharakterName, während du mit diesem Charakter eingeloggt bist. Du wirst benachrichtigt, sobald du dich einloggen kannst.",
-        [4] = "复制此角色：在本账号创建一个相同种族和职业的新角色（不要登录它），然后在此角色登录时输入 .carboncopy 新角色名。可以登录时会提示你。",
-        [5] = "複製此角色：在本帳號建立一個相同種族和職業的新角色（不要登入它），然後在此角色登入時輸入 .carboncopy 新角色名稱。可以登入時會提示你。",
-        [6] = "Para copiar este personaje: crea un personaje nuevo de la misma raza y clase en esta cuenta (NO entres con él) y escribe .carboncopy NombreNuevoPersonaje mientras estás conectado con este personaje. Se te avisará cuando puedas conectarte.",
-        [7] = "Para copiar este personaje: crea un personaje nuevo de la misma raza y clase en esta cuenta (NO entres con él) y escribe .carboncopy NombreNuevoPersonaje mientras estás conectado con este personaje. Se te avisará cuando puedas conectarte.",
-        [8] = "Чтобы скопировать этого персонажа: создайте на этом аккаунте нового персонажа той же расы и класса (НЕ заходите им), затем введите .carboncopy ИмяНовогоПерсонажа, находясь в игре этим персонажем. Вам сообщат, когда можно будет войти.",
-    },
-    ELIGIBLE = {
-        [0] = "This character (level %d) can be copied for %d ticket(s).",
-        [1] = "이 캐릭터(레벨 %d)는 티켓 %d개로 복사할 수 있습니다.",
-        [2] = "Ce personnage (niveau %d) peut être copié pour %d ticket(s).",
-        [3] = "Dieser Charakter (Stufe %d) kann für %d Ticket(s) kopiert werden.",
-        [4] = "此角色（%d 级）可以用 %d 张票券复制。",
-        [5] = "此角色（%d 級）可以用 %d 張票券複製。",
-        [6] = "Este personaje (nivel %d) se puede copiar por %d ticket(s).",
-        [7] = "Este personaje (nivel %d) se puede copiar por %d ticket(s).",
-        [8] = "Этого персонажа (уровень %d) можно скопировать за %d жетон(ов).",
-    },
-    NOT_ENOUGH_TICKETS = {
-        [0] = "This character (level %d) needs %d ticket(s) to be copied, but you only have %d.",
-        [1] = "이 캐릭터(레벨 %d)를 복사하려면 티켓 %d개가 필요하지만 %d개만 있습니다.",
-        [2] = "Ce personnage (niveau %d) nécessite %d ticket(s) pour être copié, mais vous n'en avez que %d.",
-        [3] = "Dieser Charakter (Stufe %d) braucht %d Ticket(s) zum Kopieren, du hast aber nur %d.",
-        [4] = "复制此角色（%d 级）需要 %d 张票券，但你只有 %d 张。",
-        [5] = "複製此角色（%d 級）需要 %d 張票券，但你只有 %d 張。",
-        [6] = "Este personaje (nivel %d) necesita %d ticket(s) para copiarse, pero solo tienes %d.",
-        [7] = "Este personaje (nivel %d) necesita %d ticket(s) para copiarse, pero solo tienes %d.",
-        [8] = "Для копирования этого персонажа (уровень %d) нужно %d жетон(ов), а у вас только %d.",
-    },
-    LEVEL_TOO_HIGH = {
-        [0] = "This character can't be copied: level %d is above the maximum level %d.",
-        [1] = "이 캐릭터는 복사할 수 없습니다: 레벨 %d은(는) 최대 레벨 %d보다 높습니다.",
-        [2] = "Ce personnage ne peut pas être copié : le niveau %d dépasse le niveau maximum %d.",
-        [3] = "Dieser Charakter kann nicht kopiert werden: Stufe %d liegt über der Höchststufe %d.",
-        [4] = "此角色无法复制：%d 级超过了最高等级 %d。",
-        [5] = "此角色無法複製：%d 級超過了最高等級 %d。",
-        [6] = "Este personaje no se puede copiar: el nivel %d supera el nivel máximo %d.",
-        [7] = "Este personaje no se puede copiar: el nivel %d supera el nivel máximo %d.",
-        [8] = "Этого персонажа нельзя скопировать: уровень %d выше максимального уровня %d.",
-    },
-    WRONG_MAP = {
-        [0] = "You can only copy outside of dungeons, raids, battlegrounds and arenas.",
-        [1] = "던전, 공격대, 전장, 투기장 밖에서만 복사할 수 있습니다.",
-        [2] = "Vous ne pouvez copier qu'en dehors des donjons, raids, champs de bataille et arènes.",
-        [3] = "Kopieren ist nur außerhalb von Dungeons, Schlachtzügen, Schlachtfeldern und Arenen möglich.",
-        [4] = "只能在地下城、团队副本、战场和竞技场之外复制。",
-        [5] = "只能在地城、團隊副本、戰場和競技場之外複製。",
-        [6] = "Solo puedes copiar fuera de mazmorras, bandas, campos de batalla y arenas.",
-        [7] = "Solo puedes copiar fuera de mazmorras, bandas, campos de batalla y arenas.",
-        [8] = "Копировать можно только вне подземелий, рейдов, полей боя и арен.",
-    },
-    COSTS_HEADER = {
-        [0] = "Ticket costs:",
-        [1] = "티켓 비용:",
-        [2] = "Coût en tickets :",
-        [3] = "Ticketkosten:",
-        [4] = "票券花费：",
-        [5] = "票券花費：",
-        [6] = "Coste en tickets:",
-        [7] = "Costo en tickets:",
-        [8] = "Стоимость в жетонах:",
-    },
-    COST_RANGE = {
-        [0] = "  Level %d - %d = %d ticket(s)",
-        [1] = "  레벨 %d - %d = 티켓 %d개",
-        [2] = "  Niveau %d - %d = %d ticket(s)",
-        [3] = "  Stufe %d - %d = %d Ticket(s)",
-        [4] = "  %d - %d 级 = %d 张票券",
-        [5] = "  %d - %d 級 = %d 張票券",
-        [6] = "  Nivel %d - %d = %d ticket(s)",
-        [7] = "  Nivel %d - %d = %d ticket(s)",
-        [8] = "  Уровень %d - %d = %d жетон(ов)",
-    },
-    COST_LEVEL = {
-        [0] = "  Level %d = %d ticket(s)",
-        [1] = "  레벨 %d = 티켓 %d개",
-        [2] = "  Niveau %d = %d ticket(s)",
-        [3] = "  Stufe %d = %d Ticket(s)",
-        [4] = "  %d 级 = %d 张票券",
-        [5] = "  %d 級 = %d 張票券",
-        [6] = "  Nivel %d = %d ticket(s)",
-        [7] = "  Nivel %d = %d ticket(s)",
-        [8] = "  Уровень %d = %d жетон(ов)",
-    },
-    COST_SINGLE = {
-        [0] = "  Every copy = 1 ticket",
-        [1] = "  복사 1회 = 티켓 1개",
-        [2] = "  Chaque copie = 1 ticket",
-        [3] = "  Jede Kopie = 1 Ticket",
-        [4] = "  每次复制 = 1 张票券",
-        [5] = "  每次複製 = 1 張票券",
-        [6] = "  Cada copia = 1 ticket",
-        [7] = "  Cada copia = 1 ticket",
-        [8] = "  Каждое копирование = 1 жетон",
-    },
-    STARTER_TICKETS = {
-        [0] = "Starter tickets = %d",
-        [1] = "기본 지급 티켓 = %d",
-        [2] = "Tickets de départ = %d",
-        [3] = "Starttickets = %d",
-        [4] = "初始票券 = %d",
-        [5] = "初始票券 = %d",
-        [6] = "Tickets iniciales = %d",
-        [7] = "Tickets iniciales = %d",
-        [8] = "Стартовые жетоны = %d",
-    },
-}
-
--- Picks the text for the player's client locale (English if missing) and fills in the values.
-local function cc_info(player, key, ...)
-    local entry = cc_infoText[key]
-    local text = entry[player and player:GetDbcLocale() or 0] or entry[0]
+-- All texts live in CarbonCopy_Locale.lua.
+-- cc_tl(locale, key, ...) : text for a locale id (falls back to enUS [0]), string.format'ed with the values.
+-- cc_t(player, key, ...)  : same, for the player's client locale (player nil = console / log = enUS).
+local function cc_tl(locale, key, ...)
+    local entry = L[key]
+    local text = (type(entry) == "table" and (entry[locale or 0] or entry[0])) or entry or key
     if select('#', ...) > 0 then
         return string.format(text, ...)
     end
     return text
+end
+
+local function cc_t(player, key, ...)
+    return cc_tl(player and player:GetDbcLocale() or 0, key, ...)
+end
+local cc_info = cc_t
+
+-- "GM Name" or "The console", for the ticket messages
+local function cc_actor(player)
+    if player == nil then
+        return cc_t(nil, "ACTOR_CONSOLE")
+    end
+    return cc_t(player, "ACTOR_GM", player:GetName())
 end
 
 -- Ticket cost to copy a character of this level, or nil if no ticket_Cost bracket covers it.
@@ -663,6 +552,35 @@ local function cc_liftCarbonCopyBan(characterGuid)
         ..'AND `banreason` IN ('..cc_sqlQuote(CC_BAN_REASON_COPY)..', '..cc_sqlQuote(CC_BAN_REASON_RESTORE)..');')
 end
 
+local function cc_itemExists(entry)
+    return entry ~= nil and WorldDBQuery('SELECT 1 FROM `item_template` WHERE `entry` = '..entry..' LIMIT 1;') ~= nil
+end
+
+-- Mails one of each entry to the receiver, 12 items per mail (GM stationery).
+-- Returns the new item guids in the same order as entries (nil where a mail failed).
+local function cc_sendItemMails(receiverGuid, subject, body, entries)
+    local guids = {}
+    local first = 1
+    while first <= #entries do
+        local last = math.min(first + 11, #entries)
+        local args = { subject, body, receiverGuid, 0, 61, 0, 0, 0 }
+        for n = first, last do
+            table.insert(args, entries[n])
+            table.insert(args, 1)
+        end
+        local result = { pcall(SendMail, cc_unpack(args)) }
+        if result[1] then
+            for n = first, last do
+                guids[n] = result[n - first + 2]
+            end
+        else
+            PrintError("CarbonCopy: SendMail to "..receiverGuid.." failed: "..tostring(result[2]))
+        end
+        first = last + 1
+    end
+    return guids
+end
+
 -- SendMail commits asynchronously: true once every item is visible in mail_items.
 local function cc_mailItemsCommitted(itemGuids)
     if #itemGuids == 0 then
@@ -720,7 +638,7 @@ local function cc_nextCopyId()
     return q:GetUInt32(0) + 1
 end
 
--- Where a logged item is now. Returns isMissing, description.
+-- Where a logged item is now. Returns isMissing, location key (CarbonCopy_Locale.lua LOC_*), optional value for it.
 -- Anything still owned by the target (bags, bank, keyring, mailbox, auction) or still existing elsewhere
 -- (guild bank, another character) is NOT missing; only items that no longer exist (or are lost) are.
 local function cc_locateMailedItem(itemGuid, targetGuid)
@@ -728,66 +646,71 @@ local function cc_locateMailedItem(itemGuid, targetGuid)
     if q ~= nil then
         local owner, bag, slot = q:GetUInt32(0), q:GetUInt32(1), q:GetUInt8(2)
         if owner ~= targetGuid then
-            return false, "on another character ("..(cc_characterNameByGuid(owner) or owner)..")"
+            return false, "LOC_OTHER_CHAR", cc_characterNameByGuid(owner) or tostring(owner)
         end
         if bag == 0 then
-            if slot < 19 then return false, "equipped" end
-            if slot < 23 then return false, "equipped bag" end
-            if slot < 39 then return false, "backpack" end
-            if slot < 67 then return false, "bank" end
-            if slot < 74 then return false, "bank bag slot" end
-            if slot >= 86 and slot < 118 then return false, "keyring" end
-            return false, "inventory"
+            if slot < 19 then return false, "LOC_EQUIPPED" end
+            if slot < 23 then return false, "LOC_EQUIPPED_BAG" end
+            if slot < 39 then return false, "LOC_BACKPACK" end
+            if slot < 67 then return false, "LOC_BANK" end
+            if slot < 74 then return false, "LOC_BANK_BAG_SLOT" end
+            if slot >= 86 and slot < 118 then return false, "LOC_KEYRING" end
+            return false, "LOC_INVENTORY"
         end
         local p = CharDBQuery('SELECT `slot` FROM `character_inventory` WHERE `item` = '..bag..' LIMIT 1;')
         if p ~= nil and p:GetUInt8(0) >= 67 and p:GetUInt8(0) < 74 then
-            return false, "bank (in a bag)"
+            return false, "LOC_BANK_IN_BAG"
         end
-        return false, "bags"
+        return false, "LOC_BAGS"
     end
 
     q = CharDBQuery('SELECT `mail_id`, `receiver` FROM `mail_items` WHERE `item_guid` = '..itemGuid..' LIMIT 1;')
     if q ~= nil then
         local mailId, receiver = q:GetUInt32(0), q:GetUInt32(1)
         if receiver == targetGuid then
-            return false, "mailbox (mail "..mailId..")"
+            return false, "LOC_MAILBOX", mailId
         end
         if receiver == 0 then
-            return true, "mail was returned to nobody (lost)"
+            return true, "LOC_MAIL_LOST"
         end
-        return false, "in mail to "..(cc_characterNameByGuid(receiver) or receiver)
+        return false, "LOC_MAIL_OTHER", cc_characterNameByGuid(receiver) or tostring(receiver)
     end
 
     if CharDBQuery('SELECT 1 FROM `auctionhouse` WHERE `itemguid` = '..itemGuid..' LIMIT 1;') ~= nil then
-        return false, "auction house"
+        return false, "LOC_AUCTION"
     end
     if CharDBQuery('SELECT 1 FROM `guild_bank_item` WHERE `item_guid` = '..itemGuid..' LIMIT 1;') ~= nil then
-        return false, "guild bank"
+        return false, "LOC_GUILD_BANK"
     end
     if CharDBQuery('SELECT 1 FROM `item_instance` WHERE `guid` = '..itemGuid..' LIMIT 1;') ~= nil then
-        return true, "orphaned (not in any container)"
+        return true, "LOC_ORPHANED"
     end
-    return true, "gone (sold, destroyed or mail deleted)"
+    return true, "LOC_GONE"
 end
 
--- Tells the admin (in game if still online, else the server log) how a delayed restore went.
-local function cc_notifyAdmin(adminGuid, text)
-    PrintInfo("CarbonCopy: "..text)
+-- Tells the admin (in game, in their locale, if still online) and the server log (English) how a delayed restore went.
+local function cc_notifyAdmin(adminGuid, key, ...)
+    PrintInfo("CarbonCopy: "..cc_tl(0, key, ...))
     if adminGuid ~= nil then
         local admin = GetPlayerByGUID(adminGuid)
         if admin ~= nil then
-            admin:SendBroadcastMessage(text)
+            admin:SendBroadcastMessage(cc_t(admin, key, ...))
         end
     end
 end
 
--- reply can be a ChatHandler or a function(text)
-local function cc_sendRestoreSyntax(reply)
-    local send = type(reply) == "function" and reply or function(text) reply:SendSysMessage(text) end
-    send("Syntax: .carboncopy restore $characterName                         (list mailed items and where they are now)")
-    send("Syntax: .carboncopy restore $characterName missing [copyId] [kick]  (re-send only items that no longer exist)")
-    send("Syntax: .carboncopy restore $characterName all [copyId] [kick]      (re-send every logged item)")
-    send("        kick = kick the character if online and restore once it is saved and offline")
+-- say(key, ...) sends a locale text: to a ChatHandler (in the player's locale) or, after a delay, via cc_notifyAdmin.
+local function cc_chatSay(player, chatHandler)
+    return function(key, ...)
+        chatHandler:SendSysMessage(cc_t(player, key, ...))
+    end
+end
+
+local function cc_sendRestoreSyntax(say)
+    say("SYNTAX_RESTORE_LIST")
+    say("SYNTAX_RESTORE_MISSING")
+    say("SYNTAX_RESTORE_ALL")
+    say("SYNTAX_RESTORE_KICK")
 end
 
 -- Writes enchants/gems/suffix back onto the restored items, keeps the mail, logs the new items, unlocks the character.
@@ -829,25 +752,23 @@ local function cc_finishRestore(job)
 
     cc_liftCarbonCopyBan(job.targetGuid)
     cc_restoreBusy[job.targetGuid] = nil
-    cc_notifyAdmin(job.adminGuid, "CarbonCopy restore: "..#job.pairs.." item(s) mailed to "..job.targetName.." ("..job.mode.."). "
-        ..job.targetName.." can log in again.")
+    cc_notifyAdmin(job.adminGuid, "RESTORE_DONE", #job.pairs, job.targetName, job.mode, job.targetName)
     cc_logAdmin(job.adminName, job.adminGuid, job.targetName, job.targetGuid, nil, CC_ACTION_GM_RESTORE, nil, nil,
         CC_STATUS_SUCCESS, "Restored "..#job.pairs.." item(s), mode "..job.mode..(job.kicked and ", kicked" or ""))
 end
 
 -- .carboncopy restore $name [list|missing|all] [copyId] [kick]   (GM or console)
--- reply: ChatHandler, or function(text) when re-run after a kick (the original ChatHandler is gone by then).
+-- say: function(key, ...) that delivers a locale text (see cc_chatSay / cc_notifyAdmin).
 -- admin: { name, guid } of who ran it; kicked: true when re-run after the kick (character already locked).
-local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admin, kicked)
-    local send = type(reply) == "function" and reply or function(text) reply:SendSysMessage(text) end
+local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin, kicked)
     admin = admin or { name = player and player:GetName() or "console", guid = player and tonumber(tostring(player:GetGUID())) or nil }
 
     if not cc_enableMailItemLog then
-        send("The mailed-items log is disabled (Config.enableMailItemLog = false).")
+        say("RESTORE_LOG_DISABLED")
         return
     end
     if commandArray[startIdx] == nil then
-        cc_sendRestoreSyntax(send)
+        cc_sendRestoreSyntax(say)
         return
     end
 
@@ -864,22 +785,22 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
         elseif tonumber(token) ~= nil then
             copyFilter = tonumber(token)
         else
-            cc_sendRestoreSyntax(send)
+            cc_sendRestoreSyntax(say)
             return
         end
     end
 
-    local q = CharDBQuery("SELECT `guid`, `online` FROM `characters` WHERE `name` = "..cc_sqlQuote(targetName).." LIMIT 1;")
+    local q = CharDBQuery("SELECT `guid`, `online`, `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(targetName).." LIMIT 1;")
     if q == nil then
-        send("Character "..targetName.." not found.")
+        say("RESTORE_CHAR_NOT_FOUND", targetName)
         return
     end
-    local targetGuid, targetOnline = q:GetUInt32(0), q:GetUInt8(1)
+    local targetGuid, targetOnline, targetAccount = q:GetUInt32(0), q:GetUInt8(1), q:GetUInt32(2)
     local isOnline = targetOnline ~= 0 or GetPlayerByGUID(targetGuid) ~= nil
 
     -- stop here without restoring; unlocks the character if we kicked/locked it
-    local function abort(text)
-        send(text)
+    local function abort(key, ...)
+        say(key, ...)
         if kicked then
             cc_liftCarbonCopyBan(targetGuid)
         end
@@ -887,19 +808,18 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
 
     if mode ~= "list" then
         if cc_restoreBusy[targetGuid] then
-            abort("A restore for "..targetName.." is still finishing. Try again in a few seconds.")
+            abort("RESTORE_BUSY", targetName)
             return
         end
         if isOnline and not kicked then
             if not kick then
-                send(targetName.." is online. Items can only be restored while the character is logged out "
-                    .."(enchants and gems are written to the database). Add 'kick' to kick and restore.")
+                say("RESTORE_ONLINE", targetName)
                 return
             end
             -- the ban kicks the character and keeps it out; wait until its logout save is done, then run again
-            Ban(1, targetName, 60, CC_BAN_REASON_RESTORE, admin.name)
-            send("Kicking "..targetName..". The restore runs once the character is saved and offline.")
-            local notify = function(text) cc_notifyAdmin(admin.guid, text) end
+            Ban(1, targetName, 45, CC_BAN_REASON_RESTORE, admin.name)
+            say("RESTORE_KICKING", targetName)
+            local notify = function(key, ...) cc_notifyAdmin(admin.guid, key, ...) end
             local tries = 0
             local function waitOffline()
                 tries = tries + 1
@@ -910,7 +830,7 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
                 elseif tries < 15 then
                     CreateLuaEvent(waitOffline, 1000, 1)
                 else
-                    notify("CarbonCopy restore: "..targetName.." did not go offline in time. Nothing was restored.")
+                    notify("RESTORE_NOT_OFFLINE", targetName)
                     cc_liftCarbonCopyBan(targetGuid)
                 end
             end
@@ -929,7 +849,11 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
     end
     q = CharDBQuery(sql..' ORDER BY `id`;')
     if q == nil then
-        abort("No logged CarbonCopy mail items for "..targetName..(copyFilter and (" (copy "..copyFilter..")") or "")..".")
+        if copyFilter ~= nil then
+            abort("RESTORE_NO_ITEMS_COPY", targetName, copyFilter)
+        else
+            abort("RESTORE_NO_ITEMS", targetName)
+        end
         return
     end
 
@@ -945,24 +869,30 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
         if row.sourceName == "" then
             row.sourceName = nil
         end
-        row.missing, row.where = cc_locateMailedItem(row.itemGuid, targetGuid)
+        row.missing, row.whereKey, row.whereValue = cc_locateMailedItem(row.itemGuid, targetGuid)
         table.insert(rows, row)
     until not q:NextRow()
 
     if mode == "list" then
         local missingCount = 0
-        send("===== CarbonCopy mailed items for "..targetName.." (guid "..targetGuid..") =====")
+        say("RESTORE_LIST_HEADER", targetName, targetGuid)
         if isOnline then
-            send(targetName.." is online: locations are as of the last save.")
+            say("RESTORE_LIST_ONLINE", targetName)
         end
         for _, row in ipairs(rows) do
+            local where
+            if row.whereValue ~= nil then
+                where = cc_t(player, row.whereKey, row.whereValue)
+            else
+                where = cc_t(player, row.whereKey)
+            end
             if row.missing then
                 missingCount = missingCount + 1
+                where = cc_t(player, "RESTORE_MISSING", where)
             end
-            send("#"..row.id.." copy "..row.copyId.." "..row.kind.." "..row.createdAt..": "
-                ..cc_itemLabel(player, row.entry).." - "..(row.missing and "MISSING, " or "")..row.where)
+            say("RESTORE_LIST_ROW", row.id, row.copyId, row.kind, row.createdAt, cc_itemLabel(player, row.entry), where)
         end
-        send(#rows.." item(s), "..missingCount.." missing. Use: .carboncopy restore "..targetName.." missing|all [copyId] [kick]")
+        say("RESTORE_LIST_FOOTER", #rows, missingCount, targetName)
         return
     end
 
@@ -970,7 +900,7 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
     local skippedUnknown = 0
     for _, row in ipairs(rows) do
         if mode == "all" or row.missing then
-            if WorldDBQuery('SELECT 1 FROM `item_template` WHERE `entry` = '..row.entry..' LIMIT 1;') ~= nil then
+            if cc_itemExists(row.entry) then
                 table.insert(toRestore, row)
             else
                 skippedUnknown = skippedUnknown + 1
@@ -978,52 +908,48 @@ local function cc_execRestoreCommand(player, reply, commandArray, startIdx, admi
         end
     end
     if skippedUnknown > 0 then
-        send(skippedUnknown.." item(s) skipped: their entry no longer exists in item_template.")
+        say("RESTORE_SKIPPED_UNKNOWN", skippedUnknown)
     end
     if #toRestore == 0 then
-        abort("Nothing to restore for "..targetName.." ("..mode..").")
+        abort("RESTORE_NOTHING", targetName, mode)
         return
     end
 
     -- keep the character offline while the mail and enchants are written (lifted by cc_finishRestore)
     if not kicked then
-        Ban(1, targetName, 60, CC_BAN_REASON_RESTORE, admin.name)
+        Ban(1, targetName, 45, CC_BAN_REASON_RESTORE, admin.name)
     end
+
+    -- the mail is in the target account's client language
+    local mailLocale = 0
+    local a = AuthDBQuery('SELECT `locale` FROM `account` WHERE `id` = '..targetAccount..' LIMIT 1;')
+    if a ~= nil then
+        mailLocale = a:GetUInt8(0)
+    end
+
+    local entries = {}
+    for n, row in ipairs(toRestore) do
+        entries[n] = row.entry
+    end
+    local guids = cc_sendItemMails(targetGuid, cc_tl(mailLocale, "MAIL_RESTORE_SUBJECT"),
+        cc_tl(mailLocale, "MAIL_RESTORE_BODY", targetName, cc_mailSignature), entries)
 
     local job = { pairs = {}, attempts = 0, targetGuid = targetGuid, targetName = targetName,
         adminName = admin.name, adminGuid = admin.guid, mode = mode, kicked = kicked }
-    local body = "Hello "..targetName..",\n \n these items from your Carbon Copy have been restored by a Game Master."
-    local i = 1
-    while i <= #toRestore do
-        local chunk = {}
-        local args = { "Restored items", body, targetGuid, 0, 61, 0, 0, 0 }
-        for n = i, math.min(i + 11, #toRestore) do      -- 12 items per mail
-            table.insert(chunk, toRestore[n])
-            table.insert(args, toRestore[n].entry)
-            table.insert(args, 1)
+    for n, row in ipairs(toRestore) do
+        if guids[n] ~= nil then
+            table.insert(job.pairs, { row = row, newGuid = guids[n] })
         end
-        local result = { pcall(SendMail, cc_unpack(args)) }
-        if not result[1] then
-            send("SendMail failed: "..tostring(result[2]))
-            break
-        end
-        for n, row in ipairs(chunk) do
-            if result[n + 1] ~= nil then
-                table.insert(job.pairs, { row = row, newGuid = result[n + 1] })
-            end
-        end
-        i = i + 12
     end
 
     if #job.pairs == 0 then
-        send("No items were mailed.")
+        say("RESTORE_NONE_MAILED")
         cc_liftCarbonCopyBan(targetGuid)
         return
     end
 
     cc_restoreBusy[targetGuid] = true
-    send("Mailing "..#job.pairs.." item(s) to "..targetName.." ("..mode.."). Enchants are applied in a few seconds, "
-        ..targetName.." is locked out until then.")
+    say("RESTORE_MAILING", #job.pairs, targetName, mode, targetName)
     CreateLuaEvent(function() cc_finishRestore(job) end, 3000, 1)
 end
 
@@ -1050,8 +976,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
     end
 
     if cc_scriptIsBusy ~= 0 then
-        local reason = "The server is currently busy. Please try again in a few seconds."
-        chatHandler:SendSysMessage(reason)
+        local reason = cc_t(nil, "ERR_SERVER_BUSY")
+        chatHandler:SendSysMessage(cc_t(player, "ERR_SERVER_BUSY"))
         PrintInfo("CarbonCopy user request failed because the script has a scheduled task.")
         if commandArray[1] == "carboncopy" and player ~= nil then
             cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), nil, nil, CC_STATUS_FAILED, reason)
@@ -1067,9 +993,9 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         if player == nil and ccSubCommandConsole == "tickets" then
             if commandArray[3] == nil then
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                 cc_resetVariables()
                 return false
             end
@@ -1077,13 +1003,13 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             local ticketsAction = string.lower(commandArray[3])
             if ticketsAction == "add" then
                 if commandArray[4] == nil or commandArray[5] == nil then
-                    chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
+                    chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
                     cc_resetVariables()
                     return false
                 end
 
                 if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
-                    chatHandler:SendSysMessage("Too large or negative amount chosen for .carboncopy tickets add: "..commandArray[5]..". Max allowed is +1000.")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets add", commandArray[5]))
                     cc_resetVariables()
                     return false
                 end
@@ -1095,8 +1021,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     accountId = Data_SQL:GetUInt32(0)
                 else
-                    local reason = "Player name not found. Syntax: .carboncopy tickets add $characterName $amount"
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(nil, "SYNTAX_TICKETS_ADD")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_TICKETS_ADD"))
                     cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, nil, nil, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1110,8 +1036,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 if oldTickets >= 1000 or oldTickets < 0 then
-                    local reason = "Too large total amount tickets: "..commandArray[5]..". Max allowed total is +1000. Current value: "..oldTickets
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets)
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets))
                     cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1119,7 +1045,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
                 CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';')
                 CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..commandArray[5] + oldTickets..', 0);')
-                chatHandler:SendSysMessage("The console has sucessfully used the .carboncopy tickets add command, adding "..commandArray[5].." tickets to the account "..accountId.." which belongs to player "..normalisedCharacterName..".")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".carboncopy tickets add", commandArray[5], accountId, normalisedCharacterName))
                 cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[5]), CC_STATUS_SUCCESS, "Console .carboncopy tickets add "..normalisedCharacterName.." "..commandArray[5])
                 cc_resetVariables()
                 return false
@@ -1127,13 +1053,13 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
             if ticketsAction == "remove" then
                 if commandArray[4] == nil or commandArray[5] == nil then
-                    chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+                    chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                     cc_resetVariables()
                     return false
                 end
 
                 if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
-                    chatHandler:SendSysMessage("Too large or negative amount chosen for .carboncopy tickets remove: "..commandArray[5]..". Max allowed is +1000.")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets remove", commandArray[5]))
                     cc_resetVariables()
                     return false
                 end
@@ -1145,8 +1071,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     accountId = Data_SQL:GetUInt32(0)
                 else
-                    local reason = "Player name not found. Syntax: .carboncopy tickets remove $characterName $amount"
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(nil, "SYNTAX_TICKETS_REMOVE")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                     cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, nil, nil, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1160,8 +1086,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 if oldTickets <= 0 or oldTickets < tonumber(commandArray[5]) then
-                    local reason = "The account does not have enough tickets to remove "..commandArray[5]..". Current value: "..oldTickets
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_NOT_ENOUGH_TO_REMOVE", commandArray[5], oldTickets)
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_NOT_ENOUGH_TO_REMOVE", commandArray[5], oldTickets))
                     cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, oldTickets, oldTickets, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1169,23 +1095,23 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
                 CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';')
                 CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..oldTickets - commandArray[5]..', 0);')
-                chatHandler:SendSysMessage("The console has sucessfully used the .carboncopy tickets remove command, removing "..commandArray[5].." tickets from the account "..accountId.." which belongs to player "..normalisedCharacterName..".")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_REMOVED", cc_actor(player), ".carboncopy tickets remove", commandArray[5], accountId, normalisedCharacterName))
                 cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, oldTickets, oldTickets - tonumber(commandArray[5]), CC_STATUS_SUCCESS, "Console .carboncopy tickets remove "..normalisedCharacterName.." "..commandArray[5])
                 cc_resetVariables()
                 return false
             end
 
             if ticketsAction ~= "lookup" then
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                 cc_resetVariables()
                 return false
             end
 
             local lookupNameArg = commandArray[4]
             if lookupNameArg == nil then
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
                 cc_resetVariables()
                 return false
             end
@@ -1193,8 +1119,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             local lookupCharacterName = cc_normalizeCharacterName(lookupNameArg)
             local Data_SQL = CharDBQuery("SELECT `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(lookupCharacterName).." LIMIT 1;")
             if Data_SQL == nil then
-                local reason = "Character name not found. Check spelling."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "TICKETS_CHAR_NOT_FOUND")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_CHAR_NOT_FOUND"))
                 cc_logAdmin("console", nil, lookupCharacterName, nil, nil, CC_ACTION_GM_LOOKUP, nil, nil, CC_STATUS_FAILED, reason)
                 cc_resetVariables()
                 return false
@@ -1209,14 +1135,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 lookupTickets = Config.freeTickets
             end
 
-            chatHandler:SendSysMessage("CarbonCopy tickets for "..lookupCharacterName.." (account "..lookupAccountId.."): "..lookupTickets)
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_LOOKUP_RESULT", lookupCharacterName, lookupAccountId, lookupTickets))
             cc_logAdmin("console", nil, lookupCharacterName, nil, nil, CC_ACTION_GM_LOOKUP, lookupTickets, lookupTickets, CC_STATUS_SUCCESS, "Console .carboncopy tickets lookup "..lookupCharacterName)
             cc_resetVariables()
             return false
         end
 
         if player == nil and ccSubCommandConsole == "restore" then
-            cc_execRestoreCommand(nil, chatHandler, commandArray, 3)
+            cc_execRestoreCommand(nil, cc_chatSay(nil, chatHandler), commandArray, 3)
             cc_resetVariables()
             return false
         end
@@ -1235,29 +1161,29 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         -- console / SOAP: list the commands that work from here
         if player == nil and (ccSubCommandConsole == "help" or ccSubCommandConsole == "--help") then
-            chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
-            chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
-            chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
-            chatHandler:SendSysMessage("Syntax: .carboncopy config")
-            chatHandler:SendSysMessage("Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]")
-            cc_sendRestoreSyntax(chatHandler)
-            chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
-            chatHandler:SendSysMessage("Syntax: CCACCOUNTTICKETS $accountName $amount")
-            chatHandler:SendSysMessage(".carboncopy $newCharacterName can only be run in game, from the character to copy.")
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CONFIG"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
+            cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CCACCOUNTTICKETS"))
+            chatHandler:SendSysMessage(cc_t(player, "CONSOLE_COPY_INGAME"))
             cc_resetVariables()
             return false
         end
 
         if player == nil then
-            local reason = "This command can not be run from the console, but only from the character to copy."
-            chatHandler:SendSysMessage(reason)
-            chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
+            local reason = cc_t(nil, "ERR_COPY_FROM_CONSOLE")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_FROM_CONSOLE"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
             return false
         end
         -- make sure the player is properly ranked
         if player:GetGMRank() < Config.minGMRankForCopy then
-            local reason = "You lack permisisions to execute this command."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_NO_PERMISSION")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
             cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), nil, nil, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1266,18 +1192,18 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         -- provide syntax help (GM only, it lists the GM ticket/config/logs commands)
         if commandArray[2] == "help" then
             if player:GetGMRank() < Config.minGMRankForTickets then
-                chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                 cc_resetVariables()
                 return false
             end
-            chatHandler:SendSysMessage("Syntax: .carboncopy $newCharacterName")
-            chatHandler:SendSysMessage("Syntax: .carboncopy config")
-            chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
-            chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
-            chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
-            chatHandler:SendSysMessage("Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--limit N] [--oldest]")
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_COPY"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CONFIG"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             if player:GetGMRank() >= cc_minGMRankForRestore then
-                cc_sendRestoreSyntax(chatHandler)
+                cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
             end
             cc_resetVariables()
             return false
@@ -1325,7 +1251,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         local ccSubCommand = string.lower(commandArray[2])
         if ccSubCommand == "config" or ccSubCommand == "settings" then
             if player:GetGMRank() < Config.minGMRankForTickets then
-                chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                 cc_resetVariables()
                 return false
             end
@@ -1338,15 +1264,15 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if ccSubCommand == "tickets" then
             -- every tickets action (lookup / add / remove / syntax) is GM only
             if player:GetGMRank() < Config.minGMRankForTickets then
-                chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                 cc_resetVariables()
                 return false
             end
 
             if commandArray[3] == nil then
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                 cc_resetVariables()
                 return false
             end
@@ -1354,19 +1280,19 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             local ticketsAction = string.lower(commandArray[3])
             if ticketsAction == "add" then
                 if player:GetGMRank() < Config.minGMRankForTickets then
-                    chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                    chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                     cc_resetVariables()
                     return false
                 end
 
                 if commandArray[4] == nil or commandArray[5] == nil then
-                    chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
+                    chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
                     cc_resetVariables()
                     return false
                 end
 
                 if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
-                    chatHandler:SendSysMessage("Too large or negative amount chosen for .carboncopy tickets add: "..commandArray[5]..". Max allowed is +1000.")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets add", commandArray[5]))
                     cc_resetVariables()
                     return false
                 end
@@ -1378,8 +1304,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     addAccountId = Data_SQL:GetUInt32(0)
                 else
-                    local reason = "Player name not found. Syntax: .carboncopy tickets add $characterName $amount"
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(nil, "SYNTAX_TICKETS_ADD")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_TICKETS_ADD"))
                     cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, nil, nil, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1393,8 +1319,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 if oldTickets >= 1000 or oldTickets < 0 then
-                    local reason = "Too large total amount tickets: "..commandArray[5]..". Max allowed total is +1000. Current value: "..oldTickets
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets)
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[5], oldTickets))
                     cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1402,7 +1328,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
                 CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..addAccountId..';')
                 CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..addAccountId..', '..commandArray[5] + oldTickets..', 0);')
-                chatHandler:SendSysMessage("GM "..player:GetName().. " has sucessfully used the .carboncopy tickets add command, adding "..commandArray[5].." tickets to the account "..addAccountId.." which belongs to player "..normalisedCharacterName..".")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".carboncopy tickets add", commandArray[5], addAccountId, normalisedCharacterName))
                 cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[5]), CC_STATUS_SUCCESS, "GM .carboncopy tickets add")
                 cc_resetVariables()
                 return false
@@ -1410,19 +1336,19 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
             if ticketsAction == "remove" then
                 if player:GetGMRank() < Config.minGMRankForTickets then
-                    chatHandler:SendSysMessage("You lack permisisions to execute this command.")
+                    chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                     cc_resetVariables()
                     return false
                 end
 
                 if commandArray[4] == nil or commandArray[5] == nil then
-                    chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+                    chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                     cc_resetVariables()
                     return false
                 end
 
                 if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
-                    chatHandler:SendSysMessage("Too large or negative amount chosen for .carboncopy tickets remove: "..commandArray[5]..". Max allowed is +1000.")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets remove", commandArray[5]))
                     cc_resetVariables()
                     return false
                 end
@@ -1434,8 +1360,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     removeAccountId = Data_SQL:GetUInt32(0)
                 else
-                    local reason = "Player name not found. Syntax: .carboncopy tickets remove $characterName $amount"
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(nil, "SYNTAX_TICKETS_REMOVE")
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                     cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, nil, nil, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1449,8 +1375,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 if oldTickets <= 0 or oldTickets < tonumber(commandArray[5]) then
-                    local reason = "The account does not have enough tickets to remove "..commandArray[5]..". Current value: "..oldTickets
-                    chatHandler:SendSysMessage(reason)
+                    local reason = cc_t(nil, "TICKETS_NOT_ENOUGH_TO_REMOVE", commandArray[5], oldTickets)
+                    chatHandler:SendSysMessage(cc_t(player, "TICKETS_NOT_ENOUGH_TO_REMOVE", commandArray[5], oldTickets))
                     cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, oldTickets, oldTickets, CC_STATUS_FAILED, reason)
                     cc_resetVariables()
                     return false
@@ -1458,23 +1384,23 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
                 CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..removeAccountId..';')
                 CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..removeAccountId..', '..oldTickets - commandArray[5]..', 0);')
-                chatHandler:SendSysMessage("GM "..player:GetName().. " has sucessfully used the .carboncopy tickets remove command, removing "..commandArray[5].." tickets from the account "..removeAccountId.." which belongs to player "..normalisedCharacterName..".")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_REMOVED", cc_actor(player), ".carboncopy tickets remove", commandArray[5], removeAccountId, normalisedCharacterName))
                 cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, oldTickets, oldTickets - tonumber(commandArray[5]), CC_STATUS_SUCCESS, "GM .carboncopy tickets remove")
                 cc_resetVariables()
                 return false
             end
 
             if ticketsAction ~= "lookup" then
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets add $characterName $amount")
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets remove $characterName $amount")
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
                 cc_resetVariables()
                 return false
             end
 
             local lookupNameArg = commandArray[4]
             if lookupNameArg == nil then
-                chatHandler:SendSysMessage("Syntax: .carboncopy tickets lookup $characterName")
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
                 cc_resetVariables()
                 return false
             end
@@ -1482,8 +1408,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             local lookupCharacterName = cc_normalizeCharacterName(lookupNameArg)
             local Data_SQL = CharDBQuery("SELECT `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(lookupCharacterName).." LIMIT 1;")
             if Data_SQL == nil then
-                local reason = "Character name not found. Check spelling."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "TICKETS_CHAR_NOT_FOUND")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_CHAR_NOT_FOUND"))
                 cc_logAdmin(sourceName, sourceGuid, lookupCharacterName, nil, nil, CC_ACTION_GM_LOOKUP, nil, nil, CC_STATUS_FAILED, reason)
                 cc_resetVariables()
                 return false
@@ -1498,7 +1424,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 lookupTickets = Config.freeTickets
             end
 
-            chatHandler:SendSysMessage("CarbonCopy tickets for "..lookupCharacterName.." (account "..lookupAccountId.."): "..lookupTickets)
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_LOOKUP_RESULT", lookupCharacterName, lookupAccountId, lookupTickets))
             cc_logAdmin(sourceName, sourceGuid, lookupCharacterName, nil, nil, CC_ACTION_GM_LOOKUP, lookupTickets, lookupTickets, CC_STATUS_SUCCESS, "GM .carboncopy tickets lookup")
             cc_resetVariables()
             return false
@@ -1506,7 +1432,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         if ccSubCommand == "logs" then
             if player:GetGMRank() < Config.minGMRankForTickets then
-                chatHandler:SendSysMessage("You lack permissions to execute this command.")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                 cc_resetVariables()
                 return false
             end
@@ -1517,19 +1443,19 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         if ccSubCommand == "restore" then
             if player:GetGMRank() < cc_minGMRankForRestore then
-                chatHandler:SendSysMessage("You lack permissions to execute this command.")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
                 cc_resetVariables()
                 return false
             end
-            cc_execRestoreCommand(player, chatHandler, commandArray, 3)
+            cc_execRestoreCommand(player, cc_chatSay(player, chatHandler), commandArray, 3)
             cc_resetVariables()
             return false
         end
 
         -- check maxLevel
         if player:GetLevel() > Config.maxLevel then
-            local reason = "The character you want to copy from is too high level. Max level is "..Config.maxLevel..". Aborting."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_LEVEL_TOO_HIGH", Config.maxLevel)
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_LEVEL_TOO_HIGH", Config.maxLevel))
             cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), ticketsAtEntry, ticketsAtEntry, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1542,8 +1468,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         --check for target character to be on same account
         local Data_SQL = CharDBQuery("SELECT `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(targetName).." LIMIT 1;");
         if Data_SQL == nil then
-            local reason = "Name not found. Check spelling. Aborting."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_NAME_NOT_FOUND")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NAME_NOT_FOUND"))
             cc_logPlayer(sourceName, sourceGuid, targetName, nil, player:GetLevel(), ticketsAtEntry, ticketsAtEntry, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1551,8 +1477,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         local targetAccountId = Data_SQL:GetUInt32(0)
         Data_SQL = nil
         if targetAccountId ~= accountId then
-            local reason = "The requested character is not on the same account. Aborting."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_NOT_SAME_ACCOUNT")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_SAME_ACCOUNT"))
             cc_logPlayer(sourceName, sourceGuid, targetName, nil, player:GetLevel(), ticketsAtEntry, ticketsAtEntry, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1563,8 +1489,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if Data_SQL ~= nil then
             newCharacter = Data_SQL:GetUInt32(0)
        	else
-            local reason = "Name not found. Check spelling. Aborting."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_NAME_NOT_FOUND")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NAME_NOT_FOUND"))
             cc_logPlayer(sourceName, sourceGuid, targetName, nil, player:GetLevel(), ticketsAtEntry, ticketsAtEntry, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1585,8 +1511,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         if Config.ticketCost == "single" then
             if availableTickets ~= nil and availableTickets <= 0 then
-                local reason = "You do not have enough Carbon Copy tickets to execute this command. Aborting."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "ERR_COPY_NOT_ENOUGH_TICKETS")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_ENOUGH_TICKETS"))
                 cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
                 cc_resetVariables()
                 return false
@@ -1600,15 +1526,15 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             until ticket_Cost[n] ~= nil
             requiredTickets = ticket_Cost[n]
             if availableTickets ~= nil and availableTickets <= 0 then
-                local reason = "You do not have enough Carbon Copy tickets to execute this command. Aborting."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "ERR_COPY_NOT_ENOUGH_TICKETS")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_ENOUGH_TICKETS"))
                 cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
                 cc_resetVariables()
                 return false
             end
             if availableTickets < requiredTickets then
-                local reason = "You do not have enough Carbon Copy tickets to execute this command. Aborting."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "ERR_COPY_NOT_ENOUGH_TICKETS")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_ENOUGH_TICKETS"))
                 cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
                 cc_resetVariables()
                 return false
@@ -1630,15 +1556,15 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         Data_SQL = nil
 
         if sourceRace ~= targetRace then
-            local reason = "The requested character is not the same race as this character. Aborting."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_NOT_SAME_RACE")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_SAME_RACE"))
             cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
         end
         if sourceClass ~= targetClass then
-            local reason = "The requested character is not the same class as this character. Aborting."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_NOT_SAME_CLASS")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_SAME_CLASS"))
             cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1650,8 +1576,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if Data_SQL ~= nil then
             cc_cinematic = Data_SQL:GetUInt16(0)
             if cc_cinematic == 1 then
-                local reason = "The requested character has been logged in already (or has already been Carbon Copied). Aborting."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "ERR_COPY_ALREADY_LOGGED_IN")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_ALREADY_LOGGED_IN"))
                 cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
                 cc_cinematic = nil
                 cc_resetVariables()
@@ -1667,8 +1593,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if Data_SQL ~= nil then
             cc_online = Data_SQL:GetUInt16(0)
             if cc_online == 1 then
-                local reason = "The requested character has been logged in already (or has already been Carbon Copied). Aborting."
-                chatHandler:SendSysMessage(reason)
+                local reason = cc_t(nil, "ERR_COPY_ALREADY_LOGGED_IN")
+                chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_ALREADY_LOGGED_IN"))
                 cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
                 cc_online = nil
                 cc_resetVariables()
@@ -1682,8 +1608,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         local cc_mapId
         cc_mapId = player:GetMapId()
         if not cc_has_value(cc_maps, cc_mapId) then
-            local reason = "You are not in an allowed map. Try again outside/not in a dungeon."
-            chatHandler:SendSysMessage(reason)
+            local reason = cc_t(nil, "ERR_COPY_WRONG_MAP")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_WRONG_MAP"))
             cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason)
             cc_resetVariables()
             return false
@@ -1691,8 +1617,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         -------------- COPY SCRIPT STARTS HERE ---------------------
         --set Global variable to prevent simultaneous action and lock the target.
-        --The ban is lifted by cc_fixItems as soon as the copy is done; 60s is only the fallback if that never runs.
-        Ban(1, targetName, 60, CC_BAN_REASON_COPY, "CarbonCopy" )
+        --The ban is lifted by cc_fixItems as soon as the copy is done; 45s is only the fallback if that never runs.
+        Ban(1, targetName, 45, CC_BAN_REASON_COPY, "CarbonCopy" )
         cc_scriptIsBusy = 1
         cc_newCharacter = newCharacter
         cc_newCharacterName = targetName
@@ -1708,28 +1634,16 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         cc_playerString = player:GetClassAsString(0)
         cc_logPlayer(sourceName, sourceGuid, targetName, cc_newCharacter, player:GetLevel(), availableTickets, availableTickets - requiredTickets, CC_STATUS_SUCCESS, "Copy started")
         PrintInfo("1) The player with GUID "..cc_playerGUID.." has succesfully initiated the .carboncopy command. Target character: "..cc_newCharacter);
-        chatHandler:SendSysMessage("Copy started. You have been charged "..requiredTickets.." ticket(s) for this action. There are "..availableTickets - requiredTickets.." ticket()s left.")
-        local stayMsgEnglish = "STAY logged in for one minute!"
-        local stayMsgItalian = "RIMANI connesso per un minuto!"
+        chatHandler:SendSysMessage(cc_t(player, "COPY_STARTED", requiredTickets, availableTickets - requiredTickets))
+        -- Display English and Italian (as Italian doesn't have a locale in Wrath), plus the player's own locale
         local locale = player:GetDbcLocale()
-        local stayMsgByLocale = {
-            [1] = "1분 동안 접속 상태를 유지하세요!",    -- koKR
-            [2] = "RESTEZ connecte pendant une minute!", -- frFR
-            [3] = "BLEIB eingeloggt für eine Minute!", -- deDE
-            [4] = "请保持在线一分钟！",                    -- zhCN
-            [5] = "請保持在線一分鐘！",                    -- zhTW
-            [6] = "MANTENTE conectado por un minuto!", -- esES
-            [7] = "MANTENTE conectado por un minuto!", -- esMX
-            [8] = "ОСТАВАЙТЕСЬ В ИГРЕ ОДНУ МИНУТУ!"    -- ruRU
-        }
-        local localizedStayMsg = stayMsgByLocale[locale]
-
-        -- Display English and Italian (as Italian doesn't have a locale in Wrath)
-        chatHandler:SendSysMessage(stayMsgEnglish)
-        chatHandler:SendSysMessage(stayMsgItalian)
-        if localizedStayMsg ~= nil then
-            chatHandler:SendSysMessage(localizedStayMsg)
+        chatHandler:SendSysMessage(cc_tl(0, "COPY_STAY"))
+        chatHandler:SendSysMessage(cc_tl(0, "COPY_STAY_ITALIAN"))
+        if locale ~= 0 and L.COPY_STAY[locale] ~= nil then
+            chatHandler:SendSysMessage(cc_tl(locale, "COPY_STAY"))
         end
+        -- mails for the new character use the copying player's locale (same account, same client)
+        cc_copyLocale = locale
 
         cc_eventId = CreateLuaEvent(cc_resumeSubRoutine, 1000, 11)
 
@@ -1811,72 +1725,34 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 Data_SQL = nil
             end
         elseif cc_playerString == "Shaman" then
-            local totemItem = {}
-            totemItem[1] = 38
-            totemItem[2] = 38
-            totemItem[3] = 38
-            totemItem[4] = 38
-            totemItem[5] = 38
-            local totemsDone = 0
-            local Data_SQL
-            Data_SQL = CharDBQuery('SELECT itemEntry FROM item_instance WHERE owner_guid = '..cc_playerGUID..' AND itemEntry = 5178 LIMIT 1;')
-            if Data_SQL ~= nil then
-                if Data_SQL:GetUInt16(0) == 5178 then
-                    totemItem[4] = 5178
+            -- only the totems the source character owns, in their own mail
+            -- (earth, fire, water, air, Totem of the Earthen Ring)
+            local totems = {}
+            for _, entry in ipairs({5175, 5176, 5177, 5178, 46978}) do
+                if CharDBQuery('SELECT 1 FROM item_instance WHERE owner_guid = '..cc_playerGUID..' AND itemEntry = '..entry..' LIMIT 1;') ~= nil then
+                    table.insert(totems, entry)
                 end
             end
-            Data_SQL = nil
-
-            local Data_SQL
-            Data_SQL = CharDBQuery('SELECT itemEntry FROM item_instance WHERE owner_guid = '..cc_playerGUID..' AND itemEntry = 5177 LIMIT 1;')
-            if Data_SQL ~= nil then
-                if Data_SQL:GetUInt16(0) == 5177 then
-                    totemItem[3] = 5177
+            local realTotems = #totems
+            if cc_emptySlotFiller > 0 and realTotems > 0 then
+                while #totems < 5 do
+                    table.insert(totems, cc_emptySlotFiller)
                 end
             end
-            Data_SQL = nil
-
-            local Data_SQL
-            Data_SQL = CharDBQuery('SELECT itemEntry FROM item_instance WHERE owner_guid = '..cc_playerGUID..' AND itemEntry = 5176 LIMIT 1;')
-            if Data_SQL ~= nil then
-                if Data_SQL:GetUInt16(0) == 5176 then
-                    totemItem[2] = 5176
-                end
-            end
-            Data_SQL = nil
-
-            local Data_SQL
-            Data_SQL = CharDBQuery('SELECT itemEntry FROM item_instance WHERE owner_guid = '..cc_playerGUID..' AND itemEntry = 5175 LIMIT 1;')
-            if Data_SQL ~= nil then
-                if Data_SQL:GetUInt16(0) == 5175 then
-                    totemItem[1] = 5175
-                end
-            end
-            Data_SQL = nil
-
-            local Data_SQL
-            Data_SQL = CharDBQuery('SELECT itemEntry FROM item_instance WHERE owner_guid = '..cc_playerGUID..' AND itemEntry = 46978 LIMIT 1;')
-            if Data_SQL ~= nil then
-                if Data_SQL:GetUInt16(0) == 46978 then
-                    totemItem[5] = 46978
-                end
-            end
-            Data_SQL = nil
-
-            local totemGuids = { SendMail("Copied items", "Hello "..targetName..Config.mailText, cc_newCharacter, 0, 61, 0, 0, 0, totemItem[1], 1, totemItem[2], 1, totemItem[3], 1, totemItem[4], 1, totemItem[5], 1) }
             cc_totemMailGuids = {}
             cc_totemItemGuids = {}
-            for idx = 1, 5 do
-                if totemGuids[idx] ~= nil then
-                    table.insert(cc_totemMailGuids, totemGuids[idx])
-                    if totemItem[idx] ~= 38 then
-                        table.insert(cc_totemItemGuids, totemGuids[idx])
+            if #totems > 0 then
+                local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_TOTEMS_SUBJECT"),
+                    cc_tl(cc_copyLocale, "MAIL_TOTEMS_BODY", targetName, cc_mailSignature), totems)
+                for n = 1, #totems do
+                    if guids[n] ~= nil then
+                        table.insert(cc_totemMailGuids, guids[n])
+                        if n <= realTotems then
+                            table.insert(cc_totemItemGuids, guids[n])
+                        end
                     end
                 end
             end
-
-            Data_SQL = nil
-            totemsDone = nil
         end
 
         coroutine.yield()
@@ -1960,32 +1836,40 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
         Data_SQL = nil
 
-        local Data_SQL = CharDBQuery('SELECT item FROM character_inventory WHERE guid = '..cc_playerGUID..' AND bag = 0 AND slot <= 18 LIMIT 18;')
-        local ItemCounter = 1
-        local item_id = {}
-        local item_amount = {}
-        local i
+        -- equipped items (slots 0-18), only the slots that hold something
+        local Data_SQL = CharDBQuery('SELECT ci.item, ii.itemEntry FROM character_inventory AS ci '
+            ..'INNER JOIN item_instance AS ii ON ii.guid = ci.item '
+            ..'WHERE ci.guid = '..cc_playerGUID..' AND ci.bag = 0 AND ci.slot <= 18 ORDER BY ci.slot;')
+        local gearEntries = {}
         if Data_SQL ~= nil then
             repeat
-                cc_oldItemGuids[ItemCounter] = Data_SQL:GetUInt32(0)
-                local Data_SQL2 = CharDBQuery('SELECT itemEntry FROM item_instance WHERE guid = '..cc_oldItemGuids[ItemCounter]..' LIMIT 1;')
-                item_id[ItemCounter] = Data_SQL2:GetUInt16(0)
-                ItemCounter = ItemCounter + 1
-            until not Data_SQL:NextRow()
-
-            -- set amounts to 1 or nil
-            for i = 1,18,1 do
-                if item_id[i] ~= nil then
-                    item_amount[i] = 1
+                local oldGuid, entry = Data_SQL:GetUInt32(0), Data_SQL:GetUInt32(1)
+                if cc_itemExists(entry) then
+                    table.insert(cc_oldItemGuids, oldGuid)
+                    table.insert(gearEntries, entry)
                 else
-                    item_amount[i] = 1
-                    item_id[i] = 38
+                    PrintError("CarbonCopy: item entry "..entry.." (item guid "..oldGuid..") no longer exists, not copied.")
                 end
-            end
+            until not Data_SQL:NextRow()
+        end
+        Data_SQL = nil
 
-            cc_newItemGuids[1], cc_newItemGuids[2], cc_newItemGuids[3], cc_newItemGuids[4], cc_newItemGuids[5], cc_newItemGuids[6], cc_newItemGuids[7], cc_newItemGuids[8], cc_newItemGuids[9], cc_newItemGuids[10], cc_newItemGuids[11], cc_newItemGuids[12] = SendMail("Copied items", "Hello "..targetName..Config.mailText, cc_newCharacter, 0, 61, 0, 0, 0, item_id[1], 1, item_id[2], 1, item_id[3], 1, item_id[4], 1, item_id[5], 1, item_id[6], 1, item_id[7], 1, item_id[8], 1, item_id[9], 1, item_id[10], 1, item_id[11], 1, item_id[12], 1)
-            if cc_oldItemGuids[13] ~= nil then
-                cc_newItemGuids[13], cc_newItemGuids[14], cc_newItemGuids[15], cc_newItemGuids[16], cc_newItemGuids[17], cc_newItemGuids[18] = SendMail("Copied items", "Hello "..targetName..Config.mailText, cc_newCharacter, 0, 61, 0, 0, 0, item_id[13], 1, item_id[14], 1, item_id[15], 1, item_id[16], 1, item_id[17], 1, item_id[18], 1)
+        -- optional legacy filler (Config.emptySlotFiller) so every mail is full, like the old script did
+        local mailEntries = {}
+        for n, entry in ipairs(gearEntries) do
+            mailEntries[n] = entry
+        end
+        if cc_emptySlotFiller > 0 and #mailEntries > 0 then
+            local fillTo = #mailEntries <= 12 and 12 or 18
+            while #mailEntries < fillTo do
+                table.insert(mailEntries, cc_emptySlotFiller)
+            end
+        end
+        if #mailEntries > 0 then
+            local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_GEAR_SUBJECT"),
+                cc_tl(cc_copyLocale, "MAIL_GEAR_BODY", targetName, cc_mailSignature), mailEntries)
+            for n = 1, #mailEntries do
+                cc_newItemGuids[n] = guids[n]
             end
         end
         CreateLuaEvent(cc_fixItems, 3000) -- do it after 3 seconds
@@ -2010,18 +1894,18 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 return false
             end
             if commandArray[2] == "help" then
-                chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
                 cc_resetVariables()
                 return false
             end
             if commandArray[2] == nil or commandArray[3] == nil then
-                chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
                 cc_resetVariables()
                 return false
             end
 
             if tonumber(commandArray[3]) > 1000 or tonumber(commandArray[3]) < 0 then
-                chatHandler:SendSysMessage("Too large or negative amount chosen for .addcctickets: "..commandArray[3]..". Max allowed is +1000.")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".addcctickets", commandArray[3]))
                 cc_resetVariables()
                 return false
             end
@@ -2031,7 +1915,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             if Data_SQL ~= nil then
                 accountId = Data_SQL:GetUInt32(0)
             else
-                chatHandler:SendSysMessage("Player name not found. Syntax: .addcctickets $characterName $amount")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_ADDCCTICKETS"))
                 cc_resetVariables()
                 return false
             end
@@ -2046,7 +1930,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = nil
 
             if oldTickets >= 1000 or oldTickets < 0 then
-                chatHandler:SendSysMessage("Too large total amount tickets: "..commandArray[3]..". Max allowed total is +1000. Current value: "..oldTickets)
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[3], oldTickets))
                 cc_resetVariables()
                 return false
             end
@@ -2056,25 +1940,25 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';');
             Data_SQL = CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..commandArray[3] + oldTickets..', 0);');
             Data_SQL = nil
-            chatHandler:SendSysMessage("GM "..player:GetName().. " has sucessfully used the .addcctickets command, adding "..commandArray[3].." tickets to the account "..accountId.." which belongs to player "..normalisedCharacterName..".")
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3], accountId, normalisedCharacterName))
             cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[3]), CC_STATUS_SUCCESS, "GM .addcctickets")
             cc_resetVariables()
             return false
         else
             --player is nil, must be the console. no need to check gm rank and print to console only. not chat
             if commandArray[2] == "help" then
-                chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
                 cc_resetVariables()
                 return false
             end
             if commandArray[2] == nil or commandArray[3] == nil then
-                chatHandler:SendSysMessage("Syntax: .addcctickets $characterName $amount") -- Kept for Legacy / Compatibility
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
                 cc_resetVariables()
                 return false
             end
 
             if tonumber(commandArray[3]) > 1000 or tonumber(commandArray[3]) < 0 then
-                chatHandler:SendSysMessage("Too large or negative amount chosen for .addcctickets: "..commandArray[3]..". Max allowed is +1000.")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".addcctickets", commandArray[3]))
                 cc_resetVariables()
                 return false
             end
@@ -2084,7 +1968,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             if Data_SQL ~= nil then
                 accountId = Data_SQL:GetUInt32(0)
             else
-                chatHandler:SendSysMessage("Player name not found. Syntax: .addcctickets $characterName $amount")
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_ADDCCTICKETS"))
                 cc_resetVariables()
                 return false
             end
@@ -2099,7 +1983,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = nil
 
             if oldTickets >= 1000 or oldTickets < 0 then
-                chatHandler:SendSysMessage("Too large total amount tickets: "..commandArray[3]..". Max allowed total is +1000. Current value: "..oldTickets)
+                chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[3], oldTickets))
                 cc_resetVariables()
                 return false
             end
@@ -2109,7 +1993,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';');
             Data_SQL = CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..commandArray[3] + oldTickets..', 0);');
             Data_SQL = nil
-            chatHandler:SendSysMessage("The console has sucessfully used the .addcctickets command, adding "..commandArray[3].." tickets to the account "..accountId.." which belongs to player "..normalisedCharacterName..".")
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3], accountId, normalisedCharacterName))
             cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[3]), CC_STATUS_SUCCESS, "Console .addcctickets")
             cc_resetVariables()
             return false
@@ -2128,7 +2012,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         if tonumber(commandArray[3]) > 1000 or tonumber(commandArray[3]) < 0 then
-            chatHandler:SendSysMessage("Too large or negative amount chosen for .CCACCOUNTTICKETS: "..commandArray[3]..". Max allowed is +1000.")
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".CCACCOUNTTICKETS", commandArray[3]))
             cc_resetVariables()
             return false
         end
@@ -2141,7 +2025,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         if oldTickets >= 1000 or oldTickets < 0 then
-            chatHandler:SendSysMessage("Too large total amount of tickets: "..commandArray[3]..". Max allowed total is +1000. Current value: "..oldTickets)
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_TOTAL_TOO_LARGE", commandArray[3], oldTickets))
             cc_logAdmin("console", nil, commandArray[2], nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets, CC_STATUS_FAILED, "CCACCOUNTTICKETS total exceeds max")
             cc_resetVariables()
             return false
@@ -2155,7 +2039,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         -- CCACCOUNTTICKETS is SOAP / console only: stay silent for players, like .addcctickets
         return false
     else
-        chatHandler:SendSysMessage("Syntax: CCACCOUNTTICKETS $accountName $amount")
+        chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CCACCOUNTTICKETS"))
         return false
     end
 end
@@ -2180,6 +2064,7 @@ function cc_fixItems()
     cc_fixItemsAttempts = 0
 
     for n,_ in ipairs(cc_oldItemGuids) do
+      if cc_newItemGuids[n] ~= nil then
         QueryString = 'UPDATE `item_instance` AS t1 '
         QueryString = QueryString..'INNER JOIN `item_instance` AS t2 ON t2.guid = '..cc_oldItemGuids[n]..' '
         QueryString = QueryString..'SET t1.owner_guid = '..cc_newCharacter..', t1.creatorGuid = t2.creatorGuid, '
@@ -2187,6 +2072,7 @@ function cc_fixItems()
         QueryString = QueryString..'t1.enchantments = t2.enchantments, t1.randomPropertyId = t2.randomPropertyId '
         QueryString = QueryString..'WHERE t1.guid = '..cc_newItemGuids[n]..';'
         Data_SQL = CharDBQuery(QueryString);
+      end
     end
 
     -- Copy equipment sets with remapped item GUIDs
@@ -2251,7 +2137,7 @@ function cc_fixItems()
     CreateLuaEvent(function()
         local copyingPlayer = doneSourceGuid ~= nil and GetPlayerByGUID(doneSourceGuid) or nil
         if copyingPlayer ~= nil then
-            copyingPlayer:SendBroadcastMessage("Character copy complete! "..doneTargetName.." has been copied. You can log out now.")
+            copyingPlayer:SendBroadcastMessage(cc_t(copyingPlayer, "COPY_COMPLETE", doneTargetName))
         end
     end, cc_doneMessageDelay * 1000, 1)
 
