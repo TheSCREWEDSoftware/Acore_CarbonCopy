@@ -260,6 +260,15 @@ local function cc_validTicketAmount(text)
     return amount ~= nil and amount == math.floor(amount) and amount >= 0 and amount <= 1000
 end
 
+-- Adds tickets to (negative: removes them from) what the account has, in one statement, so a copy or another
+-- grant running at the same moment is never overwritten. An account that never used .carboncopy has no row yet;
+-- it owns the starter tickets (Config.freeTickets) it would get on its first use, so the change goes on top of those.
+local function cc_changeTickets(accountId, delta)
+    CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`) '
+        ..'VALUES ('..accountId..', '..(Config.freeTickets + delta)..', 0) '
+        ..'ON DUPLICATE KEY UPDATE `tickets` = `tickets` + ('..delta..');')
+end
+
 local function cc_sqlNumber(value)
     if value == nil then
         return "NULL"
@@ -1427,7 +1436,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
-                    oldTickets = 0
+                    oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
                 end
 
                 if oldTickets >= 1000 or oldTickets < 0 then
@@ -1437,8 +1446,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';')
-                CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..commandArray[5] + oldTickets..', 0);')
+                cc_changeTickets(accountId, tonumber(commandArray[5]))
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".carboncopy tickets add", commandArray[5], accountId, normalisedCharacterName))
                 cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[5]), CC_STATUS_SUCCESS, "Console .carboncopy tickets add "..normalisedCharacterName.." "..commandArray[5])
                 return false
@@ -1472,7 +1480,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
-                    oldTickets = 0
+                    oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
                 end
 
                 if oldTickets <= 0 or oldTickets < tonumber(commandArray[5]) then
@@ -1482,8 +1490,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';')
-                CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..oldTickets - commandArray[5]..', 0);')
+                cc_changeTickets(accountId, -tonumber(commandArray[5]))
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_REMOVED", cc_actor(player), ".carboncopy tickets remove", commandArray[5], accountId, normalisedCharacterName))
                 cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, oldTickets, oldTickets - tonumber(commandArray[5]), CC_STATUS_SUCCESS, "Console .carboncopy tickets remove "..normalisedCharacterName.." "..commandArray[5])
                 return false
@@ -1611,7 +1618,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), oldTickets, oldTickets, CC_STATUS_SUCCESS, "Ticket balance lookup")
             else
                 oldTickets = Config.freeTickets
-                CharDBQuery('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
+                CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0);')
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), 0, Config.freeTickets, CC_STATUS_FREE_CONFIG_TICKET, "Free config ticket granted")
             end
             -- ticket cost list and map warning first, the most important lines last
@@ -1695,7 +1702,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
-                    oldTickets = 0
+                    oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
                 end
 
                 if oldTickets >= 1000 or oldTickets < 0 then
@@ -1705,8 +1712,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..addAccountId..';')
-                CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..addAccountId..', '..commandArray[5] + oldTickets..', 0);')
+                cc_changeTickets(addAccountId, tonumber(commandArray[5]))
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".carboncopy tickets add", commandArray[5], addAccountId, normalisedCharacterName))
                 cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[5]), CC_STATUS_SUCCESS, "GM .carboncopy tickets add")
                 return false
@@ -1745,7 +1751,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
-                    oldTickets = 0
+                    oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
                 end
 
                 if oldTickets <= 0 or oldTickets < tonumber(commandArray[5]) then
@@ -1755,8 +1761,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..removeAccountId..';')
-                CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..removeAccountId..', '..oldTickets - commandArray[5]..', 0);')
+                cc_changeTickets(removeAccountId, -tonumber(commandArray[5]))
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_REMOVED", cc_actor(player), ".carboncopy tickets remove", commandArray[5], removeAccountId, normalisedCharacterName))
                 cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_REMOVE, oldTickets, oldTickets - tonumber(commandArray[5]), CC_STATUS_SUCCESS, "GM .carboncopy tickets remove")
                 return false
@@ -1883,7 +1888,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             availableTickets = Data_SQL:GetUInt32(0)
             Data_SQL = nil
         else
-            CharDBQuery('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
+            CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0);')
             availableTickets = Config.freeTickets
         end
 
@@ -2326,7 +2331,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetUInt32(0)
             else
-                oldTickets = 0
+                oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
             end
             Data_SQL = nil
 
@@ -2337,8 +2342,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
             -- the `allow_copy_from_id` column is hardcoded to 0 for now. Only copies to the same account are possible.
             local Data_SQL
-            Data_SQL = CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';');
-            Data_SQL = CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..commandArray[3] + oldTickets..', 0);');
+            cc_changeTickets(accountId, tonumber(commandArray[3]))
             Data_SQL = nil
             chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3], accountId, normalisedCharacterName))
             cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[3]), CC_STATUS_SUCCESS, "GM .addcctickets")
@@ -2373,7 +2377,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetUInt32(0)
             else
-                oldTickets = 0
+                oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
             end
             Data_SQL = nil
 
@@ -2384,8 +2388,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
             -- the `allow_copy_from_id` column is hardcoded to 0 for now. Only copies to the same account are possible.
             local Data_SQL
-            Data_SQL = CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';');
-            Data_SQL = CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..commandArray[3] + oldTickets..', 0);');
+            cc_changeTickets(accountId, tonumber(commandArray[3]))
             Data_SQL = nil
             chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3], accountId, normalisedCharacterName))
             cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[3]), CC_STATUS_SUCCESS, "Console .addcctickets")
@@ -2414,7 +2417,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if Data_SQL  ~= nil then
             oldTickets = Data_SQL:GetUInt32(0)
         else
-            oldTickets = 0
+            oldTickets = Config.freeTickets   -- never used .carboncopy yet: the starter tickets
         end
 
         if oldTickets >= 1000 or oldTickets < 0 then
@@ -2423,7 +2426,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
-        CharDBQuery('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..(amount + oldTickets)..', 0) ;')
+        cc_changeTickets(accountId, amount)
         cc_logAdmin("console", nil, commandArray[2], nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + amount, CC_STATUS_SUCCESS, "CCACCOUNTTICKETS success")
         return false
     elseif player ~= nil then
@@ -2691,5 +2694,20 @@ if cc_enableMailItemLog and cc_mailLogRetentionDays > 0 then
     CreateLuaEvent(cc_autoCleanup, 86400000, 0)
 end
 
+-- Starter tickets are the account's from its first character on: when a character is created, an account without a
+-- ticket row gets Config.freeTickets as it is at that moment. Existing balances are never touched. (Accounts that had
+-- characters before this existed still get them on their first .carboncopy, a missing row counts as the starter tickets.)
+local PLAYER_EVENT_ON_CHARACTER_CREATE = 1
+local function cc_OnCharacterCreate(event, player)
+    local accountId = player:GetAccountId()
+    local q = CharDBQuery('SELECT 1 FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;')
+    if q == nil then
+        CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0);')
+        cc_logPlayer(player:GetName(), tonumber(tostring(player:GetGUID())), nil, nil, player:GetLevel(), 0, Config.freeTickets,
+            CC_STATUS_FREE_CONFIG_TICKET, "Starter tickets granted at character creation")
+    end
+end
+
 RegisterPlayerEvent(PLAYER_EVENT_ON_COMMAND, cc_CopyCharacter)
+RegisterPlayerEvent(PLAYER_EVENT_ON_CHARACTER_CREATE, cc_OnCharacterCreate)
 RegisterPlayerEvent(PLAYER_EVENT_ON_LOGOUT, cc_OnPlayerLogout)
