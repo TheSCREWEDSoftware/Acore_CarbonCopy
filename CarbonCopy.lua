@@ -2446,6 +2446,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         Data_SQL = AuthDBQuery("SELECT `id` FROM `account` WHERE `username` = "..cc_sqlQuote(commandArray[2])..";")
         if Data_SQL == nil then
             PrintError("CCACCOUNTTICKETS to "..commandArray[2].." has failed.")
+            -- reply, so the caller (acore-cms) can tell the tickets were not added
+            chatHandler:SendSysMessage(cc_t(nil, "TICKETS_ACCOUNT_NOT_FOUND"))
             cc_logAdmin("console", nil, commandArray[2], nil, nil, CC_ACTION_GM_ADD, nil, nil, CC_STATUS_FAILED, "CCACCOUNTTICKETS account not found")
             return false
         else
