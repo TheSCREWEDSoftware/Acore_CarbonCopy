@@ -264,7 +264,13 @@ do
         end
     end
 
-    -- ASSERT: stops this file here (ALE prints the message and a stack trace); the world server keeps running
+    -- Config.shutdownOnConfigError (default true): also shut the world server down, so it never runs without
+    -- CarbonCopy. The shutdown is queued as a console command; the assert below still stops this file right away.
+    if #problems > 0 and Config.shutdownOnConfigError ~= false then
+        PrintError("[CarbonCopy] Config.shutdownOnConfigError is on: shutting the world server down in 10 seconds.")
+        RunCommand("server shutdown 10")
+    end
+    -- ASSERT: stops this file here (ALE prints the message and a stack trace)
     assert(#problems == 0, "[CarbonCopy] ASSERT FAILED - ERROR in CarbonCopy_Config.lua, CarbonCopy NOT loaded. "
         .."Fix these and run .reload ale:\n  - "..table.concat(problems, "\n  - "))
 end

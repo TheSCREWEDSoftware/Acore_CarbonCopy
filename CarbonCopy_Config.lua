@@ -5,6 +5,11 @@ local ticket_Cost = {}
 -- Every option below has the same default as CarbonCopy had before it existed,
 -- so an existing server behaves the same until you change something.
 
+-- When a setting below is invalid, CarbonCopy refuses to load and prints every problem (an ASSERT).
+-- true = also shut the world server down (10 second countdown), so it never runs with a broken CarbonCopy.
+-- false = only CarbonCopy stops; the rest of the server keeps running.
+Config.shutdownOnConfigError = true
+
 ----------------------------------------------------------------------------------------------------
 -- Database
 ----------------------------------------------------------------------------------------------------
@@ -54,7 +59,7 @@ Config.minGMRankForRestore = 2
 -- Every worldserver that shares a balance must use exactly the same list. -1 can't be combined with realm ids.
 -- Existing balances are given this value the first time the script loads with it; changing it later starts a
 -- separate balance for the new list (the old one stays in the table).
-Config.ticketRealms = "-1"
+Config.ticketRealms = "1"
 
 -- Starter tickets: an account without tickets gets this many when it creates a character or logs in with any character.
 -- Changing it only affects accounts that haven't received them yet; existing balances are never touched.
