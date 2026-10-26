@@ -40,6 +40,15 @@ local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
 local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 0
 -- Signs the copy / restore mails (the rest of the mail text is in CarbonCopy_Locale.lua)
 local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
+-- Copied / restored items are soulbound (default) or keep the binding state of a fresh item (BoE stays tradeable).
+local cc_makeCopySoulbounded = Config.makeCopySoulbounded ~= false
+
+-- SQL for the flags of a copied item, from the original's flags (column or number):
+-- drops soulbound (0x1), BoP-tradeable (0x100) and refundable (0x1000) - those belong to the original item -
+-- then sets soulbound again if Config.makeCopySoulbounded.
+local function cc_copyFlagsSql(sourceFlags)
+    return '((('..sourceFlags..') & 4294962942) | '..(cc_makeCopySoulbounded and 1 or 0)..')'
+end
 
 -- Ban reasons used to lock a character during a copy / restore; only bans with these reasons are lifted by the script.
 local CC_BAN_REASON_COPY = "CarbonCopy"
@@ -736,7 +745,7 @@ local function cc_finishRestore(job)
         local row = pair.row
         CharDBQuery('UPDATE `item_instance` SET `owner_guid` = '..job.targetGuid..', '
             ..'`creatorGuid` = '..row.creatorGuid..', `duration` = '..row.duration..', '
-            ..'`charges` = '..cc_sqlQuote(row.charges)..', `flags` = '..row.flags..', '
+            ..'`charges` = '..cc_sqlQuote(row.charges)..', `flags` = '..cc_copyFlagsSql(row.flags)..', '
             ..'`enchantments` = '..cc_sqlQuote(row.enchantments)..', `randomPropertyId` = '..row.randomPropertyId..' '
             ..'WHERE `guid` = '..pair.newGuid..';')
     end
@@ -2073,7 +2082,7 @@ function cc_fixItems()
         QueryString = 'UPDATE `item_instance` AS t1 '
         QueryString = QueryString..'INNER JOIN `item_instance` AS t2 ON t2.guid = '..cc_oldItemGuids[n]..' '
         QueryString = QueryString..'SET t1.owner_guid = '..cc_newCharacter..', t1.creatorGuid = t2.creatorGuid, '
-        QueryString = QueryString..'t1.duration = t2.duration, t1.charges = t2.charges, t1.flags = 1, '
+        QueryString = QueryString..'t1.duration = t2.duration, t1.charges = t2.charges, t1.flags = '..cc_copyFlagsSql('t2.flags')..', '
         QueryString = QueryString..'t1.enchantments = t2.enchantments, t1.randomPropertyId = t2.randomPropertyId '
         QueryString = QueryString..'WHERE t1.guid = '..cc_newItemGuids[n]..';'
         Data_SQL = CharDBQuery(QueryString);
