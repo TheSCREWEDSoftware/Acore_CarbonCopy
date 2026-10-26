@@ -501,30 +501,30 @@ L.TICKETS_CHAR_NOT_FOUND = {
     [8] = "Имя персонажа не найдено. Проверьте написание.",
 }
 
--- %s = amount given, %d = current tickets
+-- %s = amount, %s = account "NAME (ID: 5)", %d = tickets now, %d = total it would be, %d = maximum
 L.TICKETS_TOTAL_TOO_LARGE = {
-    [0] = "Too large total amount of tickets: %s. Max allowed total is +1000. Current value: %d",
-    [1] = "티켓 총량이 너무 많습니다: %s. 최대 총량은 +1000입니다. 현재 값: %d",
-    [2] = "Nombre total de tickets trop élevé : %s. Le total maximum est +1000. Valeur actuelle : %d",
-    [3] = "Zu hohe Gesamtzahl an Tickets: %s. Maximal erlaubt sind +1000. Aktueller Wert: %d",
-    [4] = "票券总数过多：%s。最多允许 +1000。当前值：%d",
-    [5] = "票券總數過多：%s。最多允許 +1000。目前值：%d",
-    [6] = "Cantidad total de tickets demasiado alta: %s. El total máximo es +1000. Valor actual: %d",
-    [7] = "Cantidad total de tickets demasiado alta: %s. El total máximo es +1000. Valor actual: %d",
-    [8] = "Слишком много жетонов в сумме: %s. Максимум +1000. Текущее значение: %d",
+    [0] = "Can't add %s ticket(s) to account %s: it has %d ticket(s), so it would have %d. The maximum is %d.",
+    [1] = "티켓 %s개를 계정 %s에 추가할 수 없습니다: 현재 %d개이므로 %d개가 됩니다. 최대는 %d개입니다.",
+    [2] = "Impossible d'ajouter %s ticket(s) au compte %s : il en a %d, il en aurait donc %d. Le maximum est %d.",
+    [3] = "Kann %s Ticket(s) nicht zum Account %s hinzufügen: er hat %d Ticket(s), hätte dann also %d. Das Maximum ist %d.",
+    [4] = "无法添加 %s 张票券到账号 %s：当前有 %d 张，添加后将有 %d 张。上限为 %d。",
+    [5] = "無法新增 %s 張票券到帳號 %s：目前有 %d 張，新增後將有 %d 張。上限為 %d。",
+    [6] = "No se pueden añadir %s ticket(s) a la cuenta %s: tiene %d ticket(s), así que tendría %d. El máximo es %d.",
+    [7] = "No se pueden agregar %s ticket(s) a la cuenta %s: tiene %d ticket(s), así que tendría %d. El máximo es %d.",
+    [8] = "Нельзя добавить жетонов: %s на учётную запись %s: сейчас %d, стало бы %d. Максимум: %d.",
 }
 
--- %s = amount given, %d = current tickets
+-- %s = amount, %s = account "NAME (ID: 5)", %d = tickets now
 L.TICKETS_NOT_ENOUGH_TO_REMOVE = {
-    [0] = "The account does not have enough tickets to remove %s. Current value: %d",
-    [1] = "계정의 티켓이 부족하여 %s개를 제거할 수 없습니다. 현재 값: %d",
-    [2] = "Le compte n'a pas assez de tickets pour en retirer %s. Valeur actuelle : %d",
-    [3] = "Der Account hat nicht genug Tickets, um %s zu entfernen. Aktueller Wert: %d",
-    [4] = "该账号票券不足，无法移除 %s 张。当前值：%d",
-    [5] = "該帳號票券不足，無法移除 %s 張。目前值：%d",
-    [6] = "La cuenta no tiene suficientes tickets para quitar %s. Valor actual: %d",
-    [7] = "La cuenta no tiene suficientes tickets para quitar %s. Valor actual: %d",
-    [8] = "На учётной записи недостаточно жетонов, чтобы снять %s. Текущее значение: %d",
+    [0] = "Can't remove %s ticket(s) from account %s: it only has %d ticket(s).",
+    [1] = "티켓 %s개를 계정 %s에서 제거할 수 없습니다: 티켓이 %d개뿐입니다.",
+    [2] = "Impossible de retirer %s ticket(s) du compte %s : il n'en a que %d.",
+    [3] = "Kann %s Ticket(s) nicht vom Account %s entfernen: er hat nur %d Ticket(s).",
+    [4] = "无法移除 %s 张票券（账号 %s）：只有 %d 张。",
+    [5] = "無法移除 %s 張票券（帳號 %s）：只有 %d 張。",
+    [6] = "No se pueden quitar %s ticket(s) de la cuenta %s: solo tiene %d ticket(s).",
+    [7] = "No se pueden quitar %s ticket(s) de la cuenta %s: solo tiene %d ticket(s).",
+    [8] = "Нельзя снять жетонов: %s с учётной записи %s: там только %d.",
 }
 
 -- %s = who, %s = command, %s = amount, %s = character "Name (Low GUID / ID: 5)", %s = account "NAME (ID: 5)", %d = tickets before, %d = after
