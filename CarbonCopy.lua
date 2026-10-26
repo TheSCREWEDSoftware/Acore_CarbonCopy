@@ -93,6 +93,17 @@ local CC_TICKET_REALMS_SQL = "'"..CC_TICKET_REALMS.."'"
 -- so one row can serve several realms ("1 2"). Config.ticketRealms is the list a new balance starts with.
 local CC_REALM_ID = math.floor(tonumber(GetRealmID and GetRealmID() or 1) or 1)
 local CC_MY_BALANCE_SQL = "(`realm_ids` = '-1' OR FIND_IN_SET('"..CC_REALM_ID.."', REPLACE(`realm_ids`, ' ', ',')) > 0)"
+
+-- How characters are shown: "Name (Low GUID / ID: 5)".
+local function cc_characterLabel(name, guid)
+    return tostring(name).." (Low GUID / ID: "..tostring(guid)..")"
+end
+
+-- How accounts are shown everywhere: "NAME (ID: 5)".
+local function cc_accountLabel(accountId)
+    local q = AuthDBQuery('SELECT `username` FROM `account` WHERE `id` = '..tonumber(accountId)..' LIMIT 1;')
+    return (q and q:GetString(0) or "?").." (ID: "..accountId..")"
+end
 local cc_playerLogsTable = Config.playerLogsTableName or "carboncopy_player_logs"
 local cc_adminLogsTable = Config.adminLogsTableName or "carboncopy_admin_logs"
 local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
@@ -370,7 +381,7 @@ do
         ..' WHERE '..CC_MY_BALANCE_SQL..' GROUP BY `account_id` HAVING COUNT(*) > 1 LIMIT 20;')
     if q ~= nil then
         repeat
-            PrintError("CarbonCopy: account "..q:GetUInt32(0).." has more than one ticket balance for realm "..CC_REALM_ID.." in `"
+            PrintError("CarbonCopy: account "..cc_accountLabel(q:GetUInt32(0)).." has more than one ticket balance for realm "..CC_REALM_ID.." in `"
                 ..Config.customDbName.."`.`"..cc_carboncopyTable.."`.`realm_ids` (\""..q:GetString(1).."\"). Merge them into one row "
                 .."(add the tickets together, delete the other row).")
         until not q:NextRow()
@@ -497,6 +508,7 @@ local function cc_validTicketAmount(text)
     local amount = tonumber(text)
     return amount ~= nil and amount == math.floor(amount) and amount >= 0 and amount <= 1000
 end
+
 
 -- Realm lists as sets (new balances, tickets move): { all = true } for -1, otherwise { ["1"] = true, ["2"] = true }.
 local function cc_realmSet(list)
@@ -626,7 +638,7 @@ local function cc_ensureStarterTickets(accountId, who, reason)
     end
     cc_logPlayer(who and who:GetName() or "console", who and tonumber(tostring(who:GetGUID())) or nil, nil, nil,
         who and who:GetLevel() or nil, nil, nil, CC_STATUS_FREE_CONFIG_TICKET,
-        (reason or "Starter tickets granted").." (account "..accountId..", +"..Config.freeTickets..")")
+        (reason or "Starter tickets granted").." (account "..cc_accountLabel(accountId)..", +"..Config.freeTickets..")")
     return true
 end
 
@@ -1209,7 +1221,6 @@ local function cc_sendRestoreSyntax(say)
     say("SYNTAX_RESTORE_MISSING")
     say("SYNTAX_RESTORE_ALL")
     say("SYNTAX_RESTORE_KICK")
-    say("SYNTAX_TARGET")
 end
 
 -- Writes enchants/gems/suffix back onto the restored items, keeps the mail, logs the new items, unlocks the character.
@@ -1518,7 +1529,6 @@ local function cc_sendRevokeSyntax(say)
     say("SYNTAX_REVOKE_ALL")
     say("SYNTAX_REVOKE_ID")
     say("SYNTAX_REVOKE_OPTIONS")
-    say("SYNTAX_TARGET")
     say("SYNTAX_CLEANUP")
 end
 
@@ -1736,15 +1746,17 @@ local function cc_readTarget(args, idx)
     return "character", cc_normalizeCharacterName(args[idx]), idx + 1
 end
 
--- Account id of a cc_readTarget target, nil when that account / character doesn't exist.
+-- Account id of a cc_readTarget target (and the character's low GUID for a character), nil when it doesn't exist.
 local function cc_targetAccountId(kind, name)
-    local q
     if kind == "account" then
-        q = AuthDBQuery("SELECT `id` FROM `account` WHERE `username` = "..cc_sqlQuote(name).." LIMIT 1;")
-    else
-        q = CharDBQuery("SELECT `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(name).." LIMIT 1;")
+        local q = AuthDBQuery("SELECT `id` FROM `account` WHERE `username` = "..cc_sqlQuote(name).." LIMIT 1;")
+        return q and q:GetUInt32(0) or nil
     end
-    return q and q:GetUInt32(0) or nil
+    local q = CharDBQuery("SELECT `account`, `guid` FROM `characters` WHERE `name` = "..cc_sqlQuote(name).." LIMIT 1;")
+    if q == nil then
+        return nil
+    end
+    return q:GetUInt32(0), q:GetUInt32(1)
 end
 
 -- The account's balance for this realm's list; an account without a row owns the starter tickets.
@@ -1767,7 +1779,6 @@ local function cc_sendTicketsSyntax(say)
     say("SYNTAX_TICKETS_ADD")
     say("SYNTAX_TICKETS_REMOVE")
     cc_sendTicketsMoveSyntax(say)
-    say("SYNTAX_TARGET")
 end
 
 -- .carboncopy tickets move $fromRealms $toRealms   (GM or console)
@@ -1793,7 +1804,7 @@ local function cc_execTicketsMove(player, say, command)
             say(kind == "account" and "TICKETS_ACCOUNT_NOT_FOUND" or "TICKETS_CHAR_NOT_FOUND")
             return
         end
-        accountLabel = name
+        accountLabel = cc_accountLabel(accountId)
         -- with two balances for this realm (rows from an older version), prefer the one that isn't the target already,
         -- so the move merges them
         local toNorm = cc_parseTicketRealms(args[nextIdx])
@@ -1873,7 +1884,7 @@ local function cc_execTicketsMove(player, say, command)
 
         local ok = blockedBy == nil
         if not ok then
-            PrintError("CarbonCopy: tickets move: account "..acc.." also has a balance for realms \""..blockedBy.."\", which overlaps \""
+            PrintError("CarbonCopy: tickets move: account "..cc_accountLabel(acc).." also has a balance for realms \""..blockedBy.."\", which overlaps \""
                 ..to.."\" but covers other realms too. Not moved: merge or change that row first.")
         end
         if ok and #merge > 0 then
@@ -1891,11 +1902,11 @@ local function cc_execTicketsMove(player, say, command)
                 if CharDBQuery('SELECT 1 FROM '..cc_ticketTableSql..mergeWhere..' LIMIT 1;') ~= nil then
                     ok = false
                     CharDBQuery('UPDATE '..cc_ticketTableSql..' SET `tickets` = `tickets` - '..mergeTickets..where..fromSql..';')
-                    PrintError("CarbonCopy: tickets move: the merged balances of account "..acc.." could not be removed, see the SQL error above. "
+                    PrintError("CarbonCopy: tickets move: the merged balances of account "..cc_accountLabel(acc).." could not be removed, see the SQL error above. "
                         .."The added tickets were taken back again. Not moved.")
                 end
             else
-                PrintError("CarbonCopy: tickets move: the tickets of account "..acc.." could not be merged, see the SQL error above. Not moved.")
+                PrintError("CarbonCopy: tickets move: the tickets of account "..cc_accountLabel(acc).." could not be merged, see the SQL error above. Not moved.")
             end
         end
         if ok then
@@ -1903,7 +1914,7 @@ local function cc_execTicketsMove(player, say, command)
             ok = CharDBQuery('SELECT 1 FROM '..cc_ticketTableSql..where..fromSql..' LIMIT 1;') == nil
                 and CharDBQuery('SELECT 1 FROM '..cc_ticketTableSql..where..toSql..' LIMIT 1;') ~= nil
             if not ok then
-                PrintError("CarbonCopy: tickets move: the realms of account "..acc.."'s balance could not be changed from \""..from.."\" to \""
+                PrintError("CarbonCopy: tickets move: the realms of account "..cc_accountLabel(acc).."'s balance could not be changed from \""..from.."\" to \""
                     ..to.."\", see the SQL error above."..(#merge > 0 and " The merged balances were already added to it and removed." or ""))
             end
         end
@@ -1921,12 +1932,12 @@ local function cc_execTicketsMove(player, say, command)
     local adminName, adminGuid = player and player:GetName() or "console", player and tonumber(tostring(player:GetGUID())) or nil
     if accountLabel then
         if count > 0 then
-            say("TICKETS_MOVE_DONE_ACCOUNT", accountLabel, movedTickets, from, to)
+            say("TICKETS_MOVE_DONE_ACCOUNT", accountLabel, from, to, movedTickets)
             if not toSet.all and not toSet[tostring(CC_REALM_ID)] then
                 say("TICKETS_MOVE_LEFT_REALM", CC_REALM_ID, to, accountLabel)
             end
-            cc_logAdmin(adminName, adminGuid, accountLabel, nil, nil, CC_ACTION_GM_MOVE, movedTickets, movedTickets, CC_STATUS_SUCCESS,
-                "Changed "..accountLabel.."'s ticket balance from realms \""..from.."\" to \""..to.."\"")
+            cc_logAdmin(adminName, adminGuid, nil, nil, nil, CC_ACTION_GM_MOVE, movedTickets, movedTickets, CC_STATUS_SUCCESS,
+                "Changed the ticket balance of account "..accountLabel.." from realms \""..from.."\" to \""..to.."\"")
         end
         return
     end
@@ -1960,17 +1971,17 @@ local function cc_execTicketsCommand(player, chatHandler, commandArray, command,
     local extraArg = kind ~= nil and commandArray[nextIdx + (action == "lookup" and 0 or 1)] or nil
     if kind == nil or (action ~= "lookup" and amountArg == nil) or extraArg ~= nil then
         say(syntaxKey)
-        say("SYNTAX_TARGET")
-        return
+            return
     end
     if amountArg ~= nil and not cc_validTicketAmount(amountArg) then
         say("TICKETS_BAD_AMOUNT", cmdName, amountArg)
         return
     end
 
-    local logTarget = (kind == "account" and "account " or "")..name
+    -- target_name holds a character name (12 characters): account targets go into the reason instead
+    local logTarget = kind == "character" and name or nil
     local logReason = logLabel.." "..cmdName.." "..(kind == "account" and "--account " or "")..name..(amountArg and (" "..amountArg) or "")
-    local accountId = cc_targetAccountId(kind, name)
+    local accountId, characterGuid = cc_targetAccountId(kind, name)
     if accountId == nil then
         local key = (kind == "account" and "TICKETS_ACCOUNT_NOT_FOUND") or (action == "lookup" and "TICKETS_CHAR_NOT_FOUND") or "TICKETS_PLAYER_NOT_FOUND"
         if action == "lookup" then
@@ -1983,11 +1994,17 @@ local function cc_execTicketsCommand(player, chatHandler, commandArray, command,
         return
     end
 
+    local accountText = cc_accountLabel(accountId)
+    logReason = logReason.." (account "..accountText..")"
     cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
     local oldTickets = cc_ticketBalance(accountId)
 
     if action == "lookup" then
-        say(kind == "account" and "TICKETS_LOOKUP_RESULT_ACCOUNT" or "TICKETS_LOOKUP_RESULT", name, accountId, oldTickets)
+        if kind == "account" then
+            say("TICKETS_LOOKUP_RESULT_ACCOUNT", accountText, oldTickets)
+        else
+            say("TICKETS_LOOKUP_RESULT", cc_characterLabel(name, characterGuid), accountText, oldTickets)
+        end
         cc_logAdmin(logName, logGuid, logTarget, nil, nil, actionCode, oldTickets, oldTickets, CC_STATUS_SUCCESS, logReason)
         return
     end
@@ -2007,8 +2024,12 @@ local function cc_execTicketsCommand(player, chatHandler, commandArray, command,
 
     local delta = action == "add" and amount or -amount
     cc_changeTickets(accountId, delta)
-    say((action == "add" and "TICKETS_ADDED" or "TICKETS_REMOVED")..(kind == "account" and "_ACCOUNT" or ""),
-        cc_actor(player), cmdName, amountArg, accountId, name)
+    local doneKey = action == "add" and "TICKETS_ADDED" or "TICKETS_REMOVED"
+    if kind == "account" then
+        say(doneKey.."_ACCOUNT", cc_actor(player), cmdName, amountArg, accountText, oldTickets, oldTickets + delta)
+    else
+        say(doneKey, cc_actor(player), cmdName, amountArg, cc_characterLabel(name, characterGuid), accountText, oldTickets, oldTickets + delta)
+    end
     cc_logAdmin(logName, logGuid, logTarget, nil, nil, actionCode, oldTickets, oldTickets + delta, CC_STATUS_SUCCESS, logReason)
 end
 
@@ -2044,14 +2065,14 @@ local function cc_forEachTarget(say, commandArray, startIdx, run)
         ..'JOIN `characters` c ON c.`guid` = m.`target_guid` WHERE c.`account` = '..accountId
         ..' AND m.`superseded_by_id` IS NULL AND m.`revoked_at` IS NULL ORDER BY c.`name`;')
     if q == nil then
-        say("RESTORE_ACCOUNT_NONE", name)
+        say("RESTORE_ACCOUNT_NONE", cc_accountLabel(accountId))
         return
     end
     local names = {}
     repeat
         table.insert(names, q:GetString(0))
     until not q:NextRow()
-    say("RESTORE_ACCOUNT_CHARACTERS", name, #names, table.concat(names, ", "))
+    say("RESTORE_ACCOUNT_CHARACTERS", cc_accountLabel(accountId), #names, table.concat(names, ", "))
     for _, characterName in ipairs(names) do
         run(argsFor(characterName), startIdx)
     end
@@ -2146,7 +2167,6 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE_ACCOUNT"))
-            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TARGET"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CONFIG"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
@@ -2184,7 +2204,6 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE_ACCOUNT"))
-            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TARGET"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             if player:GetGMRank() >= cc_minGMRankForRestore then
                 cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
@@ -2793,9 +2812,11 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
 
             local normalisedCharacterName = cc_normalizeCharacterName(commandArray[2])
-            Data_SQL = CharDBQuery("SELECT `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(normalisedCharacterName).." LIMIT 1;");
+            local characterGuid
+            Data_SQL = CharDBQuery("SELECT `account`, `guid` FROM `characters` WHERE `name` = "..cc_sqlQuote(normalisedCharacterName).." LIMIT 1;");
             if Data_SQL ~= nil then
                 accountId = Data_SQL:GetUInt32(0)
+                characterGuid = Data_SQL:GetUInt32(1)
             else
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_ADDCCTICKETS"))
                 return false
@@ -2820,7 +2841,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             local Data_SQL
             cc_changeTickets(accountId, tonumber(commandArray[3]))
             Data_SQL = nil
-            chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3], accountId, normalisedCharacterName))
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3],
+                cc_characterLabel(normalisedCharacterName, characterGuid), cc_accountLabel(accountId), oldTickets, oldTickets + tonumber(commandArray[3])))
             cc_logAdmin(sourceName, sourceGuid, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[3]), CC_STATUS_SUCCESS, "GM .addcctickets")
             return false
         else
@@ -2840,9 +2862,11 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
 
             local normalisedCharacterName = cc_normalizeCharacterName(commandArray[2])
-            Data_SQL = CharDBQuery("SELECT `account` FROM `characters` WHERE `name` = "..cc_sqlQuote(normalisedCharacterName).." LIMIT 1;");
+            local characterGuid
+            Data_SQL = CharDBQuery("SELECT `account`, `guid` FROM `characters` WHERE `name` = "..cc_sqlQuote(normalisedCharacterName).." LIMIT 1;");
             if Data_SQL ~= nil then
                 accountId = Data_SQL:GetUInt32(0)
+                characterGuid = Data_SQL:GetUInt32(1)
             else
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_PLAYER_NOT_FOUND").." "..cc_t(player, "SYNTAX_ADDCCTICKETS"))
                 return false
@@ -2867,7 +2891,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             local Data_SQL
             cc_changeTickets(accountId, tonumber(commandArray[3]))
             Data_SQL = nil
-            chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3], accountId, normalisedCharacterName))
+            chatHandler:SendSysMessage(cc_t(player, "TICKETS_ADDED", cc_actor(player), ".addcctickets", commandArray[3],
+                cc_characterLabel(normalisedCharacterName, characterGuid), cc_accountLabel(accountId), oldTickets, oldTickets + tonumber(commandArray[3])))
             cc_logAdmin("console", nil, normalisedCharacterName, nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + tonumber(commandArray[3]), CC_STATUS_SUCCESS, "Console .addcctickets")
             return false
         end
