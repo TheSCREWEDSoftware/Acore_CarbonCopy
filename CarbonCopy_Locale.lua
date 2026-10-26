@@ -323,15 +323,15 @@ L.COPY_COMPLETE = {
 
 -- %d = tickets refunded
 L.COPY_FAILED_REFUNDED = {
-    [0] = "Something went wrong during the copy. Your %d ticket(s) have been refunded and you can try again.",
-    [1] = "복사 중 문제가 발생했습니다. 티켓 %d개가 환불되었으며 다시 시도할 수 있습니다.",
-    [2] = "Un problème est survenu pendant la copie. Vos %d ticket(s) ont été remboursés, vous pouvez réessayer.",
-    [3] = "Bei der Kopie ist etwas schiefgelaufen. Deine %d Ticket(s) wurden erstattet, du kannst es erneut versuchen.",
-    [4] = "复制过程中出现问题。已退还你的 %d 张票券，你可以再试一次。",
-    [5] = "複製過程中出現問題。已退還你的 %d 張票券，你可以再試一次。",
-    [6] = "Algo salió mal durante la copia. Se te han devuelto %d ticket(s) y puedes intentarlo de nuevo.",
-    [7] = "Algo salió mal durante la copia. Se te han devuelto %d ticket(s) y puedes intentarlo de nuevo.",
-    [8] = "Во время копирования произошла ошибка. Жетоны возвращены (%d), можно попробовать снова.",
+    [0] = "Something went wrong during the copy. Your %d ticket(s) have been refunded. The new character stays locked until you copy to it again successfully.",
+    [1] = "복사 중 문제가 발생했습니다. 티켓 %d개가 환불되었습니다. 새 캐릭터는 다시 복사에 성공할 때까지 잠겨 있습니다.",
+    [2] = "Un problème est survenu pendant la copie. Vos %d ticket(s) ont été remboursés. Le nouveau personnage reste verrouillé jusqu'à une nouvelle copie réussie.",
+    [3] = "Bei der Kopie ist etwas schiefgelaufen. Deine %d Ticket(s) wurden erstattet. Der neue Charakter bleibt gesperrt, bis eine erneute Kopie gelingt.",
+    [4] = "复制过程中出现问题。已退还你的 %d 张票券。新角色将保持锁定，直到再次复制成功。",
+    [5] = "複製過程中出現問題。已退還你的 %d 張票券。新角色將保持鎖定，直到再次複製成功。",
+    [6] = "Algo salió mal durante la copia. Se te han devuelto %d ticket(s). El nuevo personaje seguirá bloqueado hasta que vuelvas a copiarlo con éxito.",
+    [7] = "Algo salió mal durante la copia. Se te han devuelto %d ticket(s). El nuevo personaje seguirá bloqueado hasta que vuelvas a copiarlo con éxito.",
+    [8] = "Во время копирования произошла ошибка. Жетоны возвращены (%d). Новый персонаж останется заблокированным, пока повторное копирование не пройдёт успешно.",
 }
 
 L.COPY_FAILED_CONTACT_GM = {
@@ -603,6 +603,19 @@ L.TICKETS_MOVE_DONE = {
     [6] = "Saldos de tickets de %d cuenta(s) movidos de los reinos \"%s\" a \"%s\".",
     [7] = "Saldos de tickets de %d cuenta(s) movidos de los reinos \"%s\" a \"%s\".",
     [8] = "Балансы жетонов %d учётн. записей перенесены из миров \"%s\" в \"%s\".",
+}
+
+-- %d = accounts not moved, %s = from list
+L.TICKETS_MOVE_PARTIAL = {
+    [0] = "%d balance(s) could not be moved and were left in realms \"%s\" (see the server log).",
+    [1] = "잔액 %d개를 옮기지 못해 렐름 \"%s\"에 남겨 두었습니다 (서버 로그 참고).",
+    [2] = "%d solde(s) n'ont pas pu être déplacés et sont restés dans les royaumes \"%s\" (voir le journal du serveur).",
+    [3] = "%d Guthaben konnten nicht verschoben werden und bleiben in den Realms \"%s\" (siehe Serverlog).",
+    [4] = "%d 个余额无法移动，已保留在服务器 \"%s\"（见服务器日志）。",
+    [5] = "%d 個餘額無法移動，已保留在伺服器 \"%s\"（見伺服器日誌）。",
+    [6] = "%d saldo(s) no se pudieron mover y se quedaron en los reinos \"%s\" (ver el registro del servidor).",
+    [7] = "%d saldo(s) no se pudieron mover y se quedaron en los reinos \"%s\" (ver el registro del servidor).",
+    [8] = "Не удалось перенести балансов: %d, они остались в мирах \"%s\" (см. журнал сервера).",
 }
 
 -- %s = realm list
