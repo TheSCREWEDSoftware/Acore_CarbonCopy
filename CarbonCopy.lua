@@ -322,6 +322,20 @@ local function cc_columnExists(tableName, column)
         ..tableName.."' AND COLUMN_NAME = '"..column.."' LIMIT 1;") ~= nil
 end
 local cc_ticketTableSql = '`'..Config.customDbName..'`.`'..cc_carboncopyTable..'`'
+
+-- One row per ticket deduction while it runs (see the copy's "deduct tickets" step): the deduction and the row's
+-- `applied` flag are changed by the same statement, so reading the flag back says exactly whether this copy paid,
+-- whatever other worldservers sharing the balance did meanwhile. The row is deleted right after.
+local cc_chargesTableSql = '`'..Config.customDbName..'`.`'..cc_carboncopyTable..'_charges`'
+CharDBQuery('CREATE TABLE IF NOT EXISTS '..cc_chargesTableSql..' ('
+    ..'`token` VARCHAR(64) NOT NULL, '
+    ..'`account_id` INT UNSIGNED NOT NULL, '
+    ..'`amount` INT NOT NULL, '
+    ..'`applied` TINYINT(1) NOT NULL DEFAULT 0, '
+    ..'`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, '
+    ..'PRIMARY KEY (`token`)'
+    ..') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT="CarbonCopy: ticket deductions in progress (normally empty)";')
+CharDBQuery('DELETE FROM '..cc_chargesTableSql..' WHERE `created_at` < NOW() - INTERVAL 1 DAY;')
 if not cc_columnExists(cc_carboncopyTable, 'realm_ids') then
     CharDBQuery('ALTER TABLE '..cc_ticketTableSql..' ADD COLUMN `realm_ids` VARCHAR(255) NOT NULL DEFAULT "-1" COMMENT "-1 = all realms, or realm ids separated by spaces";')
     if not cc_columnExists(cc_carboncopyTable, 'realm_id') then
@@ -2483,19 +2497,21 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             requiredTickets = 1
         end
         -- only if the balance still covers it (another worldserver sharing the balance, or a GM, may have used it since
-        -- the check): read, deduct conditionally, read again - the deduction applied when the balance dropped by the cost
-        local balanceWhere = ' WHERE `account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL
-        local before = CharDBQuery('SELECT `tickets` FROM '..cc_ticketTableSql..balanceWhere..' LIMIT 1;')
-        before = before and before:GetInt32(0) or nil
-        if before == nil or before < requiredTickets then
-            error("not enough tickets any more ("..tostring(before).." < "..requiredTickets..")")
-        end
-        CharDBQuery('UPDATE '..cc_ticketTableSql..' SET `tickets` = `tickets` - '..requiredTickets..balanceWhere
-            ..' AND `tickets` >= '..requiredTickets..';')
-        local after = CharDBQuery('SELECT `tickets` FROM '..cc_ticketTableSql..balanceWhere..' LIMIT 1;')
-        after = after and after:GetInt32(0) or nil
-        if after == nil or after > before - requiredTickets then
-            error("the tickets could not be deducted ("..tostring(before).." -> "..tostring(after)..")")
+        -- the check). One statement takes the tickets and marks this copy's charge row as applied, or does neither,
+        -- so the flag read back afterwards is exact.
+        local chargeToken = cc_sqlQuote(CC_REALM_ID.."-"..accountId.."-"..cc_copyToken.."-"..os.time())
+        CharDBQuery('INSERT INTO '..cc_chargesTableSql..' (`token`, `account_id`, `amount`) VALUES ('..chargeToken..', '
+            ..accountId..', '..requiredTickets..');')
+        CharDBQuery('UPDATE '..cc_ticketTableSql..' AS b JOIN '..cc_chargesTableSql..' AS c ON c.`token` = '..chargeToken
+            ..' AND c.`applied` = 0 SET b.`tickets` = b.`tickets` - '..requiredTickets..', c.`applied` = 1 '
+            ..'WHERE b.`account_id` = '..accountId..' AND '..CC_MY_BALANCE_SQL..' AND b.`tickets` >= '..requiredTickets..';')
+        local charge = CharDBQuery('SELECT `applied` FROM '..cc_chargesTableSql..' WHERE `token` = '..chargeToken..' LIMIT 1;')
+        local charged = charge ~= nil and charge:GetUInt8(0) == 1
+        CharDBQuery('DELETE FROM '..cc_chargesTableSql..' WHERE `token` = '..chargeToken..';')
+        if charge == nil then
+            error("the ticket deduction could not be recorded, see the SQL error above")
+        elseif not charged then
+            error("not enough tickets any more (the balance changed since the check)")
         end
         cc_copyCharged = requiredTickets
 
