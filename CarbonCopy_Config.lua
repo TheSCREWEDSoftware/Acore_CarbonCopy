@@ -35,6 +35,12 @@ Config.mailExpireDays = 0
 -- Seconds to wait, after a copy is fully done and the new character unlocked, before telling the player they can log out.
 Config.doneMessageDelay = 5
 
+-- While a character is locked for a copy / restore, how often (milliseconds) to check whether a kicked character is
+-- offline and whether the mails are saved, and how many times to check before giving up (250 x 60 = 15 seconds).
+-- Lower interval = shorter lock. Minimum 50 ms.
+Config.pollIntervalMs = 250
+Config.pollMaxAttempts = 60
+
 -- The amount of free tickets to grant when .carboncopy is executed for the first time on that account
 Config.freeTickets = 4
 

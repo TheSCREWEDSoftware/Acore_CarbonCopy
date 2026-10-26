@@ -54,10 +54,10 @@ end
 local CC_BAN_REASON_COPY = "CarbonCopy"
 local CC_BAN_REASON_RESTORE = "CarbonCopy restore"
 
--- While a character is locked, check every 250 ms (up to 15 s) whether it is offline / its mail is saved,
--- so the lock only lasts as long as the work really takes.
-local CC_POLL_MS = 250
-local CC_POLL_MAX = 60
+-- While a character is locked, check every Config.pollIntervalMs (up to Config.pollMaxAttempts times) whether it is
+-- offline / its mail is saved, so the lock only lasts as long as the work really takes.
+local CC_POLL_MS = math.max(50, tonumber(Config.pollIntervalMs) or 250)
+local CC_POLL_MAX = math.max(1, tonumber(Config.pollMaxAttempts) or 60)
 
 -- "Never expires" = 2038-01-01. Kept below 2^31 so no signed 32-bit time math (core or client) can overflow it.
 local CC_MAIL_NEVER_EXPIRES = 2145916800
@@ -2062,7 +2062,7 @@ function cc_fixItems()
     local n
     local Data_SQL
 
-    -- SendMail commits asynchronously; wait (up to 15 seconds) until the mailed items are in the DB
+    -- SendMail commits asynchronously; wait (up to pollIntervalMs x pollMaxAttempts) until the mailed items are in the DB
     local mailedGuids = {}
     for _, guid in pairs(cc_newItemGuids) do
         table.insert(mailedGuids, guid)
