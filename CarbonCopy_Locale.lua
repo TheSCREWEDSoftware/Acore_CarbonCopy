@@ -596,15 +596,15 @@ L.RESTORE_BUSY = {
 
 -- %s = character name
 L.RESTORE_ONLINE = {
-    [0] = "%s is online. Items can only be restored while the character is logged out (enchants and gems are written to the database). Add 'kick' to kick and restore.",
-    [1] = "%s 캐릭터가 접속 중입니다. 아이템은 캐릭터가 접속 종료 상태일 때만 복구할 수 있습니다 (마법부여와 보석은 데이터베이스에 기록됨). 추방 후 복구하려면 'kick'을 추가하세요.",
-    [2] = "%s est en ligne. Les objets ne peuvent être restaurés que personnage déconnecté (enchantements et gemmes sont écrits en base de données). Ajoutez 'kick' pour l'expulser et restaurer.",
-    [3] = "%s ist online. Gegenstände können nur wiederhergestellt werden, wenn der Charakter ausgeloggt ist (Verzauberungen und Edelsteine werden in die Datenbank geschrieben). Füge 'kick' hinzu, um ihn zu kicken und wiederherzustellen.",
-    [4] = "%s 在线。只有角色离线时才能恢复物品（附魔和宝石写入数据库）。添加 'kick' 可踢下线并恢复。",
-    [5] = "%s 在線。只有角色離線時才能恢復物品（附魔和寶石寫入資料庫）。加上 'kick' 可踢下線並恢復。",
-    [6] = "%s está conectado. Los objetos solo se pueden restaurar con el personaje desconectado (encantamientos y gemas se escriben en la base de datos). Añade 'kick' para expulsarlo y restaurar.",
-    [7] = "%s está conectado. Los objetos solo se pueden restaurar con el personaje desconectado (encantamientos y gemas se escriben en la base de datos). Agrega 'kick' para expulsarlo y restaurar.",
-    [8] = "%s в игре. Предметы можно восстановить только когда персонаж вне игры (зачарования и самоцветы записываются в базу данных). Добавьте 'kick', чтобы отключить персонажа и восстановить.",
+    [0] = "%s is online. Items can only be restored while the character is logged out (enchants and gems are written to the database). Add '--kick' to kick and restore.",
+    [1] = "%s 캐릭터가 접속 중입니다. 아이템은 캐릭터가 접속 종료 상태일 때만 복구할 수 있습니다 (마법부여와 보석은 데이터베이스에 기록됨). 추방 후 복구하려면 '--kick'을 추가하세요.",
+    [2] = "%s est en ligne. Les objets ne peuvent être restaurés que personnage déconnecté (enchantements et gemmes sont écrits en base de données). Ajoutez '--kick' pour l'expulser et restaurer.",
+    [3] = "%s ist online. Gegenstände können nur wiederhergestellt werden, wenn der Charakter ausgeloggt ist (Verzauberungen und Edelsteine werden in die Datenbank geschrieben). Füge '--kick' hinzu, um ihn zu kicken und wiederherzustellen.",
+    [4] = "%s 在线。只有角色离线时才能恢复物品（附魔和宝石写入数据库）。添加 '--kick' 可踢下线并恢复。",
+    [5] = "%s 在線。只有角色離線時才能恢復物品（附魔和寶石寫入資料庫）。加上 '--kick' 可踢下線並恢復。",
+    [6] = "%s está conectado. Los objetos solo se pueden restaurar con el personaje desconectado (encantamientos y gemas se escriben en la base de datos). Añade '--kick' para expulsarlo y restaurar.",
+    [7] = "%s está conectado. Los objetos solo se pueden restaurar con el personaje desconectado (encantamientos y gemas se escriben en la base de datos). Agrega '--kick' para expulsarlo y restaurar.",
+    [8] = "%s в игре. Предметы можно восстановить только когда персонаж вне игры (зачарования и самоцветы записываются в базу данных). Добавьте '--kick', чтобы отключить персонажа и восстановить.",
 }
 
 -- %s = character name
@@ -713,15 +713,15 @@ L.RESTORE_MISSING = {
 
 -- %d = items, %d = missing, %s = character name
 L.RESTORE_LIST_FOOTER = {
-    [0] = "%d item(s), %d missing. Use: .carboncopy restore %s missing|all [copyId] [kick]",
-    [1] = "아이템 %d개, 없음 %d개. 사용법: .carboncopy restore %s missing|all [copyId] [kick]",
-    [2] = "%d objet(s), %d manquant(s). Utilisation : .carboncopy restore %s missing|all [copyId] [kick]",
-    [3] = "%d Gegenstand/Gegenstände, %d fehlen. Verwendung: .carboncopy restore %s missing|all [copyId] [kick]",
-    [4] = "共 %d 件物品，缺失 %d 件。用法：.carboncopy restore %s missing|all [copyId] [kick]",
-    [5] = "共 %d 件物品，缺失 %d 件。用法：.carboncopy restore %s missing|all [copyId] [kick]",
-    [6] = "%d objeto(s), %d faltan. Uso: .carboncopy restore %s missing|all [copyId] [kick]",
-    [7] = "%d objeto(s), %d faltan. Uso: .carboncopy restore %s missing|all [copyId] [kick]",
-    [8] = "Предметов: %d, отсутствует: %d. Использование: .carboncopy restore %s missing|all [copyId] [kick]",
+    [0] = "%d item(s), %d missing. Use: .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [1] = "아이템 %d개, 없음 %d개. 사용법: .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [2] = "%d objet(s), %d manquant(s). Utilisation : .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [3] = "%d Gegenstand/Gegenstände, %d fehlen. Verwendung: .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [4] = "共 %d 件物品，缺失 %d 件。用法：.carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [5] = "共 %d 件物品，缺失 %d 件。用法：.carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [6] = "%d objeto(s), %d faltan. Uso: .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [7] = "%d objeto(s), %d faltan. Uso: .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
+    [8] = "Предметов: %d, отсутствует: %d. Использование: .carboncopy restore %s missing|all [copyId] [--kick] [--clear]",
 }
 
 -- %d = count
@@ -810,6 +810,133 @@ L.LOC_MAIL_OTHER     = { [0] = "in mail to %s",   [1] = "%s에게 보낸 우편 
 -- %d = mail id
 L.LOC_MAILBOX        = { [0] = "mailbox (mail %d)", [1] = "우편함 (우편 %d)", [2] = "boîte aux lettres (courrier %d)", [3] = "Briefkasten (Post %d)", [4] = "邮箱（邮件 %d）", [5] = "信箱（郵件 %d）", [6] = "buzón (correo %d)", [7] = "buzón (correo %d)", [8] = "почтовый ящик (письмо %d)" }
 
+-- same values as RESTORE_DONE, used with --clear
+L.RESTORE_DONE_CLEARED = {
+    [0] = "CarbonCopy restore: %d item(s) mailed to %s (%s). Log entries cleared. %s can log in again.",
+    [1] = "CarbonCopy 복구: 아이템 %d개를 %s에게 보냈습니다 (%s). 기록을 삭제했습니다. 이제 %s(으)로 다시 접속할 수 있습니다.",
+    [2] = "Restauration CarbonCopy : %d objet(s) envoyé(s) à %s (%s). Entrées du journal supprimées. %s peut de nouveau se connecter.",
+    [3] = "CarbonCopy-Wiederherstellung: %d Gegenstand/Gegenstände an %s verschickt (%s). Protokolleinträge gelöscht. %s kann sich wieder einloggen.",
+    [4] = "CarbonCopy 恢复：已邮寄 %d 件物品给 %s（%s）。已清除记录。%s 现在可以重新登录。",
+    [5] = "CarbonCopy 恢復：已郵寄 %d 件物品給 %s（%s）。已清除紀錄。%s 現在可以重新登入。",
+    [6] = "Restauración CarbonCopy: %d objeto(s) enviado(s) a %s (%s). Registros borrados. %s ya puede volver a conectarse.",
+    [7] = "Restauración CarbonCopy: %d objeto(s) enviado(s) a %s (%s). Registros borrados. %s ya puede volver a conectarse.",
+    [8] = "Восстановление CarbonCopy: отправлено предметов: %d персонажу %s (%s). Записи журнала удалены. %s снова может войти в игру.",
+}
+
+-- ---------------------------------------------------------------------------
+-- .carboncopy revoke (GM / console): take back items still unclaimed in the mailbox
+-- ---------------------------------------------------------------------------
+-- %s = character name
+L.REVOKE_ONLINE = {
+    [0] = "%s is online. Mail can only be revoked while the character is logged out. Add '--kick' to kick and revoke.",
+    [1] = "%s 캐릭터가 접속 중입니다. 우편은 캐릭터가 접속 종료 상태일 때만 회수할 수 있습니다. 추방 후 회수하려면 '--kick'을 추가하세요.",
+    [2] = "%s est en ligne. Le courrier ne peut être repris que personnage déconnecté. Ajoutez '--kick' pour l'expulser et reprendre.",
+    [3] = "%s ist online. Post kann nur zurückgenommen werden, wenn der Charakter ausgeloggt ist. Füge '--kick' hinzu, um ihn zu kicken und zurückzunehmen.",
+    [4] = "%s 在线。只有角色离线时才能收回邮件。添加 '--kick' 可踢下线并收回。",
+    [5] = "%s 在線。只有角色離線時才能收回郵件。加上 '--kick' 可踢下線並收回。",
+    [6] = "%s está conectado. El correo solo se puede retirar con el personaje desconectado. Añade '--kick' para expulsarlo y retirar.",
+    [7] = "%s está conectado. El correo solo se puede retirar con el personaje desconectado. Agrega '--kick' para expulsarlo y retirar.",
+    [8] = "%s в игре. Почту можно отозвать только когда персонаж вне игры. Добавьте '--kick', чтобы отключить персонажа и отозвать.",
+}
+
+-- %s = character name
+L.REVOKE_KICKING = {
+    [0] = "Kicking %s. The revoke runs once the character is saved and offline.",
+    [1] = "%s 캐릭터를 추방합니다. 캐릭터가 저장되고 접속 종료되면 회수가 진행됩니다.",
+    [2] = "Expulsion de %s. La reprise démarrera une fois le personnage sauvegardé et déconnecté.",
+    [3] = "%s wird gekickt. Die Rücknahme startet, sobald der Charakter gespeichert und offline ist.",
+    [4] = "正在将 %s 踢下线。角色保存并离线后将开始收回。",
+    [5] = "正在將 %s 踢下線。角色儲存並離線後將開始收回。",
+    [6] = "Expulsando a %s. La retirada se hará cuando el personaje esté guardado y desconectado.",
+    [7] = "Expulsando a %s. La retirada se hará cuando el personaje esté guardado y desconectado.",
+    [8] = "Отключаем %s. Отзыв начнётся, когда персонаж будет сохранён и выйдет из игры.",
+}
+
+-- %s = character name
+L.REVOKE_NOT_OFFLINE = {
+    [0] = "CarbonCopy revoke: %s did not go offline in time. Nothing was revoked.",
+    [1] = "CarbonCopy 회수: %s 캐릭터가 제시간에 접속 종료되지 않았습니다. 아무것도 회수되지 않았습니다.",
+    [2] = "Reprise CarbonCopy : %s ne s'est pas déconnecté à temps. Rien n'a été repris.",
+    [3] = "CarbonCopy-Rücknahme: %s ist nicht rechtzeitig offline gegangen. Nichts wurde zurückgenommen.",
+    [4] = "CarbonCopy 收回：%s 未能及时离线，未收回任何物品。",
+    [5] = "CarbonCopy 收回：%s 未能及時離線，未收回任何物品。",
+    [6] = "Retirada CarbonCopy: %s no se desconectó a tiempo. No se retiró nada.",
+    [7] = "Retirada CarbonCopy: %s no se desconectó a tiempo. No se retiró nada.",
+    [8] = "Отзыв CarbonCopy: %s не вышел из игры вовремя. Ничего не отозвано.",
+}
+
+-- %s = character name, %d = guid
+L.REVOKE_LIST_HEADER = {
+    [0] = "===== CarbonCopy revoke preview for %s (guid %d) =====",
+    [1] = "===== %s의 CarbonCopy 회수 미리보기 (guid %d) =====",
+    [2] = "===== Aperçu de reprise CarbonCopy pour %s (guid %d) =====",
+    [3] = "===== CarbonCopy-Rücknahme-Vorschau für %s (GUID %d) =====",
+    [4] = "===== %s 的 CarbonCopy 收回预览（guid %d）=====",
+    [5] = "===== %s 的 CarbonCopy 收回預覽（guid %d）=====",
+    [6] = "===== Vista previa de retirada CarbonCopy para %s (guid %d) =====",
+    [7] = "===== Vista previa de retirada CarbonCopy para %s (guid %d) =====",
+    [8] = "===== Предпросмотр отзыва CarbonCopy для %s (guid %d) =====",
+}
+
+-- %s = location
+L.REVOKE_ROW_REMOVE = { [0] = "will be revoked: %s", [1] = "회수됨: %s", [2] = "sera repris : %s", [3] = "wird zurückgenommen: %s", [4] = "将被收回：%s", [5] = "將被收回：%s", [6] = "se retirará: %s", [7] = "se retirará: %s", [8] = "будет отозван: %s" }
+L.REVOKE_ROW_GONE   = { [0] = "already gone: %s", [1] = "이미 없음: %s", [2] = "déjà disparu : %s", [3] = "bereits weg: %s", [4] = "已消失：%s", [5] = "已消失：%s", [6] = "ya no existe: %s", [7] = "ya no existe: %s", [8] = "уже нет: %s" }
+L.REVOKE_ROW_SKIP   = { [0] = "already taken, not revoked: %s", [1] = "이미 수령함, 회수 안 함: %s", [2] = "déjà récupéré, non repris : %s", [3] = "bereits entnommen, wird nicht zurückgenommen: %s", [4] = "已领取，不会收回：%s", [5] = "已領取，不會收回：%s", [6] = "ya recogido, no se retira: %s", [7] = "ya recogido, no se retira: %s", [8] = "уже забран, не отзывается: %s" }
+
+-- %d = to revoke, %d = gone, %d = taken, %s = character name
+L.REVOKE_LIST_FOOTER = {
+    [0] = "%d item(s) to revoke, %d already gone, %d already taken. Use: .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [1] = "회수할 아이템 %d개, 이미 없음 %d개, 이미 수령 %d개. 사용법: .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [2] = "%d objet(s) à reprendre, %d déjà disparu(s), %d déjà récupéré(s). Utilisation : .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [3] = "%d zurückzunehmen, %d bereits weg, %d bereits entnommen. Verwendung: .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [4] = "可收回 %d 件，已消失 %d 件，已领取 %d 件。用法：.carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [5] = "可收回 %d 件，已消失 %d 件，已領取 %d 件。用法：.carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [6] = "%d objeto(s) para retirar, %d ya no existen, %d ya recogidos. Uso: .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [7] = "%d objeto(s) para retirar, %d ya no existen, %d ya recogidos. Uso: .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+    [8] = "К отзыву: %d, уже нет: %d, уже забрано: %d. Использование: .carboncopy revoke %s all|#id [copyId] [--kick] [--clear]",
+}
+
+-- %s = character name, %d = items already taken
+L.REVOKE_NOTHING = {
+    [0] = "Nothing to revoke for %s (%d item(s) already taken out of the mail).",
+    [1] = "%s에게서 회수할 것이 없습니다 (이미 우편에서 꺼낸 아이템 %d개).",
+    [2] = "Rien à reprendre pour %s (%d objet(s) déjà sorti(s) du courrier).",
+    [3] = "Nichts zurückzunehmen für %s (%d Gegenstand/Gegenstände bereits aus der Post entnommen).",
+    [4] = "%s 没有可收回的物品（已有 %d 件从邮件中取出）。",
+    [5] = "%s 沒有可收回的物品（已有 %d 件從郵件中取出）。",
+    [6] = "Nada que retirar para %s (%d objeto(s) ya sacados del correo).",
+    [7] = "Nada que retirar para %s (%d objeto(s) ya sacados del correo).",
+    [8] = "Нечего отзывать у %s (уже забрано из почты: %d).",
+}
+
+-- %d = revoked, %s = character name, %d = gone, %d = taken, %s = REVOKE_LOG_DELETED / REVOKE_LOG_MARKED
+L.REVOKE_DONE = {
+    [0] = "CarbonCopy revoke: %d item(s) taken back from the mailbox of %s, %d already gone, %d already taken (left alone). Log entries %s.",
+    [1] = "CarbonCopy 회수: 아이템 %d개를 %s의 우편함에서 회수했습니다. 이미 없음 %d개, 이미 수령 %d개 (그대로 둠). 기록: %s.",
+    [2] = "Reprise CarbonCopy : %d objet(s) repris dans la boîte aux lettres de %s, %d déjà disparu(s), %d déjà récupéré(s) (laissés). Entrées du journal %s.",
+    [3] = "CarbonCopy-Rücknahme: %d Gegenstand/Gegenstände aus dem Briefkasten von %s zurückgenommen, %d bereits weg, %d bereits entnommen (unverändert). Protokolleinträge %s.",
+    [4] = "CarbonCopy 收回：已收回 %d 件物品（%s 的邮箱），已消失 %d 件，已领取 %d 件（未处理）。记录%s。",
+    [5] = "CarbonCopy 收回：已收回 %d 件物品（%s 的信箱），已消失 %d 件，已領取 %d 件（未處理）。紀錄%s。",
+    [6] = "Retirada CarbonCopy: %d objeto(s) retirados del buzón de %s, %d ya no existían, %d ya recogidos (sin tocar). Registros %s.",
+    [7] = "Retirada CarbonCopy: %d objeto(s) retirados del buzón de %s, %d ya no existían, %d ya recogidos (sin tocar). Registros %s.",
+    [8] = "Отзыв CarbonCopy: отозвано предметов: %d из почтового ящика %s, уже нет: %d, уже забрано: %d (не тронуты). Записи журнала %s.",
+}
+L.REVOKE_LOG_DELETED = { [0] = "deleted", [1] = "삭제됨", [2] = "supprimées", [3] = "gelöscht", [4] = "已删除", [5] = "已刪除", [6] = "borrados", [7] = "borrados", [8] = "удалены" }
+L.REVOKE_LOG_MARKED  = { [0] = "marked as revoked", [1] = "회수됨으로 표시", [2] = "marquées comme reprises", [3] = "als zurückgenommen markiert", [4] = "已标记为收回", [5] = "已標記為收回", [6] = "marcados como retirados", [7] = "marcados como retirados", [8] = "помечены как отозванные" }
+
+-- %d = rows deleted, %d = days
+L.CLEANUP_DONE = {
+    [0] = "Deleted %d CarbonCopy mail log entr(ies) that were %d day(s) old or older.",
+    [1] = "%d개의 CarbonCopy 우편 기록을 삭제했습니다 (%d일 이상 지난 기록).",
+    [2] = "%d entrée(s) du journal de courrier CarbonCopy supprimée(s) (%d jour(s) ou plus).",
+    [3] = "%d CarbonCopy-Postprotokolleinträge gelöscht, die %d Tag(e) oder älter waren.",
+    [4] = "已删除 %d 条 CarbonCopy 邮件记录（%d 天或更早）。",
+    [5] = "已刪除 %d 筆 CarbonCopy 郵件紀錄（%d 天或更早）。",
+    [6] = "Se borraron %d registro(s) de correo de CarbonCopy con %d día(s) o más de antigüedad.",
+    [7] = "Se borraron %d registro(s) de correo de CarbonCopy con %d día(s) o más de antigüedad.",
+    [8] = "Удалено записей журнала почты CarbonCopy: %d (старше %d дн. или ровно).",
+}
+
 -- ---------------------------------------------------------------------------
 -- Command syntax, logs viewer and config dump (GM / console).
 -- English only; add [1]..[8] entries the same way if you want them translated.
@@ -820,10 +947,15 @@ L.SYNTAX_TICKETS_LOOKUP   = { [0] = "Syntax: .carboncopy tickets lookup $charact
 L.SYNTAX_TICKETS_ADD      = { [0] = "Syntax: .carboncopy tickets add $characterName $amount" }
 L.SYNTAX_TICKETS_REMOVE   = { [0] = "Syntax: .carboncopy tickets remove $characterName $amount" }
 L.SYNTAX_LOGS             = { [0] = "Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]" }
-L.SYNTAX_RESTORE_LIST     = { [0] = "Syntax: .carboncopy restore $characterName                         (list mailed items and where they are now)" }
-L.SYNTAX_RESTORE_MISSING  = { [0] = "Syntax: .carboncopy restore $characterName missing [copyId] [kick]  (re-send only items that no longer exist)" }
-L.SYNTAX_RESTORE_ALL      = { [0] = "Syntax: .carboncopy restore $characterName all [copyId] [kick]      (re-send every logged item)" }
-L.SYNTAX_RESTORE_KICK     = { [0] = "        kick = kick the character if online and restore once it is saved and offline" }
+L.SYNTAX_RESTORE_LIST     = { [0] = "Syntax: .carboncopy restore $characterName                                   (list mailed items and where they are now)" }
+L.SYNTAX_RESTORE_MISSING  = { [0] = "Syntax: .carboncopy restore $characterName missing [copyId] [--kick] [--clear]  (re-send only items that no longer exist)" }
+L.SYNTAX_RESTORE_ALL      = { [0] = "Syntax: .carboncopy restore $characterName all [copyId] [--kick] [--clear]      (re-send every logged item)" }
+L.SYNTAX_RESTORE_KICK     = { [0] = "        --kick = kick the character if online and run once it is saved and offline. --clear = delete the log entries once done" }
+L.SYNTAX_REVOKE_LIST      = { [0] = "Syntax: .carboncopy revoke $characterName                                    (list what a revoke would take back from the mailbox)" }
+L.SYNTAX_REVOKE_ALL       = { [0] = "Syntax: .carboncopy revoke $characterName all [copyId] [--kick] [--clear]     (take back every logged item still unclaimed in the mail)" }
+L.SYNTAX_REVOKE_ID        = { [0] = "Syntax: .carboncopy revoke $characterName #logId [--kick] [--clear]           (take back one item, #logId from the list)" }
+L.SYNTAX_REVOKE_OPTIONS   = { [0] = "        revoke --clear = delete the log entries instead of marking them revoked" }
+L.SYNTAX_CLEANUP          = { [0] = "Syntax: .carboncopy cleanup $days   (delete CarbonCopy mail log entries that are $days days old or older)" }
 L.SYNTAX_ADDCCTICKETS     = { [0] = "Syntax: .addcctickets $characterName $amount" }
 L.SYNTAX_CCACCOUNTTICKETS = { [0] = "Syntax: CCACCOUNTTICKETS $accountName $amount" }
 L.CONSOLE_COPY_INGAME     = { [0] = ".carboncopy $newCharacterName can only be run in game, from the character to copy." }

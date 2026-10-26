@@ -34,6 +34,8 @@ local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
 local cc_enableMailItemLog = Config.enableMailItemLog ~= false
 local cc_mailExpireDays = tonumber(Config.mailExpireDays) or 0
 local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
+-- Mailed-items log rows older than this many days are deleted automatically (at startup and once a day). 0 = keep forever.
+local cc_mailLogRetentionDays = math.max(0, math.floor(tonumber(Config.mailItemLogRetentionDays) or 0))
 
 local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
 -- 0 = empty slots / missing totems send nothing. An item entry (38 = Recruit's Shirt) = old behaviour, pad the mails with it.
@@ -54,6 +56,7 @@ end
 -- Ban reasons used to lock a character during a copy / restore; only bans with these reasons are lifted by the script.
 local CC_BAN_REASON_COPY = "CarbonCopy"
 local CC_BAN_REASON_RESTORE = "CarbonCopy restore"
+local CC_BAN_REASON_REVOKE = "CarbonCopy revoke"
 
 -- While a character is locked, check every Config.pollIntervalMs (up to Config.pollMaxAttempts times) whether it is
 -- offline / its mail is saved, so the lock only lasts as long as the work really takes.
@@ -123,7 +126,7 @@ if cc_enableAdminLogs then
         ..'`target_name` VARCHAR(12) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL, '
         ..'`target_guid` INT(11) DEFAULT NULL, '
         ..'`target_level` TINYINT UNSIGNED DEFAULT NULL, '
-        ..'`action_code` TINYINT UNSIGNED NOT NULL COMMENT "3=GM_ADD,4=GM_REMOVE,5=GM_LOOKUP,6=GM_RESTORE", '
+        ..'`action_code` TINYINT UNSIGNED NOT NULL COMMENT "3=GM_ADD,4=GM_REMOVE,5=GM_LOOKUP,6=GM_RESTORE,7=GM_REVOKE,8=GM_CLEANUP", '
         ..'`tickets_before` INT(11) DEFAULT NULL, '
         ..'`tickets_after` INT(11) DEFAULT NULL, '
         ..'`status_code` TINYINT UNSIGNED NOT NULL COMMENT "1=SUCCESS,2=FAILED", '
@@ -145,6 +148,8 @@ local CC_ACTION_GM_ADD = 3
 local CC_ACTION_GM_REMOVE = 4
 local CC_ACTION_GM_LOOKUP = 5
 local CC_ACTION_GM_RESTORE = 6
+local CC_ACTION_GM_REVOKE = 7
+local CC_ACTION_GM_CLEANUP = 8
 
 -- Every item mailed by a copy (or by a restore) with a snapshot of its enchants/gems/suffix, so an admin can re-send it.
 -- A row with superseded_by_id set has been replaced by a restored copy and is no longer considered.
@@ -170,6 +175,8 @@ if cc_enableMailItemLog then
         ..'`restored_from_id` INT UNSIGNED DEFAULT NULL, '
         ..'`superseded_by_id` INT UNSIGNED DEFAULT NULL, '
         ..'`restored_by` VARCHAR(32) DEFAULT NULL, '
+        ..'`revoked_at` TIMESTAMP NULL DEFAULT NULL, '
+        ..'`revoked_by` VARCHAR(32) DEFAULT NULL, '
         ..'`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, '
         ..'PRIMARY KEY (`id`), '
         ..'KEY `idx_ccmi_target_guid` (`target_guid`), '
@@ -177,6 +184,13 @@ if cc_enableMailItemLog then
         ..'KEY `idx_ccmi_copy_id` (`copy_id`)'
         ..') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DEFAULT;'
     )
+    -- tables created before .carboncopy revoke existed: add its columns
+    for _, column in ipairs({ { "revoked_at", "TIMESTAMP NULL DEFAULT NULL" }, { "revoked_by", "VARCHAR(32) DEFAULT NULL" } }) do
+        if CharDBQuery("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '"..Config.customDbName.."' AND TABLE_NAME = '"
+            ..cc_mailItemsTable.."' AND COLUMN_NAME = '"..column[1].."' LIMIT 1;") == nil then
+            CharDBQuery('ALTER TABLE `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` ADD COLUMN `'..column[1]..'` '..column[2]..';')
+        end
+    end
 end
 
 local function cc_sqlQuote(value)
@@ -568,7 +582,7 @@ local function cc_liftCarbonCopyBan(characterGuid)
         return
     end
     CharDBQuery('UPDATE `character_banned` SET `active` = 0 WHERE `guid` = '..characterGuid..' AND `active` = 1 '
-        ..'AND `banreason` IN ('..cc_sqlQuote(CC_BAN_REASON_COPY)..', '..cc_sqlQuote(CC_BAN_REASON_RESTORE)..');')
+        ..'AND `banreason` IN ('..cc_sqlQuote(CC_BAN_REASON_COPY)..', '..cc_sqlQuote(CC_BAN_REASON_RESTORE)..', '..cc_sqlQuote(CC_BAN_REASON_REVOKE)..');')
 end
 
 local function cc_itemExists(entry)
@@ -647,6 +661,18 @@ local function cc_logMailedItem(copyId, kind, sourceGuid, sourceName, targetGuid
         ..'ii.creatorGuid, ii.duration, COALESCE(ii.charges, SPACE(0)), COALESCE(ii.flags, 0), ii.enchantments, ii.randomPropertyId, '
         ..cc_sqlNumber(restoredFromId)..', '..cc_sqlQuote(restoredBy)..' '
         ..'FROM `item_instance` AS ii WHERE ii.guid = '..itemGuid..';')
+end
+
+-- Deletes mailed-items log rows older than `days` days. Returns how many were deleted.
+local function cc_cleanupMailLog(days)
+    local logTable = '`'..Config.customDbName..'`.`'..cc_mailItemsTable..'`'
+    local where = ' WHERE `created_at` < NOW() - INTERVAL '..math.floor(days)..' DAY'
+    local q = CharDBQuery('SELECT `id` FROM '..logTable..where..';')
+    local count = q ~= nil and q:GetRowCount() or 0
+    if count > 0 then
+        CharDBQuery('DELETE FROM '..logTable..where..';')
+    end
+    return count
 end
 
 local function cc_nextCopyId()
@@ -758,7 +784,11 @@ local function cc_finishRestore(job)
     cc_extendMailForItems(job.targetGuid, newGuids)
 
     for _, pair in ipairs(job.pairs) do
-        local row = pair.row
+      local row = pair.row
+      if job.clear then
+        -- --clear: everything went fine, drop the restored item's log row and don't log the new copy
+        CharDBQuery('DELETE FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` WHERE `id` = '..row.id..';')
+      else
         cc_logMailedItem(row.copyId, "restore", row.sourceGuid, row.sourceName, job.targetGuid, job.targetName,
             row.sourceItemGuid, pair.newGuid, row.id, job.adminName)
         local q = CharDBQuery('SELECT `id` FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` '
@@ -767,16 +797,50 @@ local function cc_finishRestore(job)
             CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` SET `superseded_by_id` = '..q:GetUInt32(0)
                 ..' WHERE `id` = '..row.id..';')
         end
+      end
     end
 
     cc_liftCarbonCopyBan(job.targetGuid)
     cc_restoreBusy[job.targetGuid] = nil
-    cc_notifyAdmin(job.adminGuid, "RESTORE_DONE", #job.pairs, job.targetName, job.mode, job.targetName)
+    cc_notifyAdmin(job.adminGuid, job.clear and "RESTORE_DONE_CLEARED" or "RESTORE_DONE", #job.pairs, job.targetName, job.mode, job.targetName)
     cc_logAdmin(job.adminName, job.adminGuid, job.targetName, job.targetGuid, nil, CC_ACTION_GM_RESTORE, nil, nil,
-        CC_STATUS_SUCCESS, "Restored "..#job.pairs.." item(s), mode "..job.mode..(job.kicked and ", kicked" or ""))
+        CC_STATUS_SUCCESS, "Restored "..#job.pairs.." item(s), mode "..job.mode..(job.kicked and ", kicked" or "")..(job.clear and ", log cleared" or ""))
 end
 
--- .carboncopy restore $name [list|missing|all] [copyId] [kick]   (GM or console)
+-- For restore / revoke: returns true when the caller must stop because the target is online.
+-- Without 'kick' it says onlineKey. With 'kick' it locks (which kicks) the character, waits until its logout save is
+-- done and calls rerun(notify) - notify(key, ...) reaches the admin later, the ChatHandler is gone by then.
+local function cc_requireOffline(targetName, targetGuid, isOnline, kick, kicked, admin, say, banReason, onlineKey, kickingKey, timeoutKey, rerun)
+    if not isOnline or kicked then
+        return false
+    end
+    if not kick then
+        say(onlineKey, targetName)
+        return true
+    end
+    Ban(1, targetName, 45, banReason, admin.name)
+    say(kickingKey, targetName)
+    local notify = function(key, ...) cc_notifyAdmin(admin.guid, key, ...) end
+    local tries = 0
+    local function waitOffline()
+        tries = tries + 1
+        local o = CharDBQuery('SELECT `online` FROM `characters` WHERE `guid` = '..targetGuid..' LIMIT 1;')
+        local offline = GetPlayerByGUID(targetGuid) == nil and (o == nil or o:GetUInt8(0) == 0)
+        if offline then
+            rerun(notify)
+        elseif tries < CC_POLL_MAX then
+            CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
+        else
+            notify(timeoutKey, targetName)
+            cc_liftCarbonCopyBan(targetGuid)
+        end
+    end
+    CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
+    return true
+end
+
+-- .carboncopy restore $name [list|missing|all] [copyId] [--kick] [--clear]   (GM or console)
+-- --clear: once the restore went fine, delete the log rows of the restored items instead of logging the new copies.
 -- say: function(key, ...) that delivers a locale text (see cc_chatSay / cc_notifyAdmin).
 -- admin: { name, guid } of who ran it; kicked: true when re-run after the kick (character already locked).
 local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin, kicked)
@@ -792,15 +856,17 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
     end
 
     local targetName = cc_normalizeCharacterName(commandArray[startIdx])
-    local mode, copyFilter, kick = "list", nil, false
-    for n = startIdx + 1, startIdx + 3 do
+    local mode, copyFilter, kick, clear = "list", nil, false, false
+    for n = startIdx + 1, startIdx + 4 do
         local token = commandArray[n] and string.lower(commandArray[n])
         if token == nil then
             break
         elseif token == "list" or token == "missing" or token == "all" then
             mode = token
-        elseif token == "kick" then
+        elseif token == "--kick" then
             kick = true
+        elseif token == "--clear" then
+            clear = true
         elseif tonumber(token) ~= nil then
             copyFilter = tonumber(token)
         else
@@ -830,30 +896,9 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
             abort("RESTORE_BUSY", targetName)
             return
         end
-        if isOnline and not kicked then
-            if not kick then
-                say("RESTORE_ONLINE", targetName)
-                return
-            end
-            -- the ban kicks the character and keeps it out; wait until its logout save is done, then run again
-            Ban(1, targetName, 45, CC_BAN_REASON_RESTORE, admin.name)
-            say("RESTORE_KICKING", targetName)
-            local notify = function(key, ...) cc_notifyAdmin(admin.guid, key, ...) end
-            local tries = 0
-            local function waitOffline()
-                tries = tries + 1
-                local o = CharDBQuery('SELECT `online` FROM `characters` WHERE `guid` = '..targetGuid..' LIMIT 1;')
-                local offline = GetPlayerByGUID(targetGuid) == nil and (o == nil or o:GetUInt8(0) == 0)
-                if offline then
-                    cc_execRestoreCommand(nil, notify, commandArray, startIdx, admin, true)
-                elseif tries < CC_POLL_MAX then
-                    CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
-                else
-                    notify("RESTORE_NOT_OFFLINE", targetName)
-                    cc_liftCarbonCopyBan(targetGuid)
-                end
-            end
-            CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
+        if cc_requireOffline(targetName, targetGuid, isOnline, kick, kicked, admin, say, CC_BAN_REASON_RESTORE,
+            "RESTORE_ONLINE", "RESTORE_KICKING", "RESTORE_NOT_OFFLINE",
+            function(notify) cc_execRestoreCommand(nil, notify, commandArray, startIdx, admin, true) end) then
             return
         end
     end
@@ -862,7 +907,7 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
         ..'`enchantments`, `random_property_id`, `source_guid`, COALESCE(`source_name`, SPACE(0)), `source_item_guid`, '
         ..'DATE_FORMAT(`created_at`, "%Y-%m-%d %H:%i") '
         ..'FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` '
-        ..'WHERE `target_guid` = '..targetGuid..' AND `superseded_by_id` IS NULL'
+        ..'WHERE `target_guid` = '..targetGuid..' AND `superseded_by_id` IS NULL AND `revoked_at` IS NULL'
     if copyFilter ~= nil then
         sql = sql..' AND `copy_id` = '..copyFilter
     end
@@ -954,7 +999,7 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
         cc_tl(mailLocale, "MAIL_RESTORE_BODY", targetName, cc_mailSignature), entries)
 
     local job = { pairs = {}, attempts = 0, targetGuid = targetGuid, targetName = targetName,
-        adminName = admin.name, adminGuid = admin.guid, mode = mode, kicked = kicked }
+        adminName = admin.name, adminGuid = admin.guid, mode = mode, kicked = kicked, clear = clear }
     for n, row in ipairs(toRestore) do
         if guids[n] ~= nil then
             table.insert(job.pairs, { row = row, newGuid = guids[n] })
@@ -970,6 +1015,200 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
     cc_restoreBusy[targetGuid] = true
     say("RESTORE_MAILING", #job.pairs, targetName, mode, targetName)
     CreateLuaEvent(function() cc_finishRestore(job) end, CC_POLL_MS, 1)
+end
+
+-- Revoke only takes items that are still unclaimed in the target's mailbox. Anything the player already took out
+-- of the mail is left alone (and reported).
+local CC_REVOKABLE = { LOC_MAILBOX = true }
+
+-- Deletes an unclaimed mailed item: its mail_items row, the item, and the mail itself once it is empty.
+local function cc_deleteMailedItem(itemGuid, targetGuid)
+    local m = CharDBQuery('SELECT `mail_id` FROM `mail_items` WHERE `item_guid` = '..itemGuid..' AND `receiver` = '..targetGuid..' LIMIT 1;')
+    if m == nil then
+        return
+    end
+    local mailId = m:GetUInt32(0)
+    CharDBQuery('DELETE FROM `mail_items` WHERE `item_guid` = '..itemGuid..' AND `receiver` = '..targetGuid..';')
+    CharDBQuery('DELETE FROM `item_instance` WHERE `guid` = '..itemGuid..';')
+    if CharDBQuery('SELECT 1 FROM `mail_items` WHERE `mail_id` = '..mailId..' LIMIT 1;') == nil then
+        CharDBQuery('DELETE FROM `mail` WHERE `id` = '..mailId..' AND `money` = 0 AND `cod` = 0;')
+        CharDBQuery('UPDATE `mail` SET `has_items` = 0 WHERE `id` = '..mailId..';')
+    end
+end
+
+-- .carboncopy cleanup $days   (GM or console): delete mailed-items log rows that are $days days old or older
+local function cc_execCleanupCommand(player, say, daysArg)
+    local days = tonumber(daysArg)
+    if days == nil or days < 1 or days ~= math.floor(days) then
+        say("SYNTAX_CLEANUP")
+        return
+    end
+    local admin = player and player:GetName() or "console"
+    local count = cc_cleanupMailLog(days)
+    say("CLEANUP_DONE", count, days)
+    cc_logAdmin(admin, player and tonumber(tostring(player:GetGUID())) or nil, nil, nil, nil, CC_ACTION_GM_CLEANUP, nil, nil,
+        CC_STATUS_SUCCESS, "Deleted "..count.." mailed-items log row(s) older than "..days.." day(s)")
+end
+
+local function cc_sendRevokeSyntax(say)
+    say("SYNTAX_REVOKE_LIST")
+    say("SYNTAX_REVOKE_ALL")
+    say("SYNTAX_REVOKE_ID")
+    say("SYNTAX_REVOKE_OPTIONS")
+    say("SYNTAX_CLEANUP")
+end
+
+-- .carboncopy revoke $name [all|#logId] [copyId] [--kick] [--clear]   (GM or console)
+-- Takes back CarbonCopy items that are still unclaimed in the mailbox. Without all/#logId it only lists what would
+-- happen. Their log rows are marked revoked (restore skips them); with --clear they are deleted instead.
+local function cc_execRevokeCommand(player, say, commandArray, startIdx, admin, kicked)
+    admin = admin or { name = player and player:GetName() or "console", guid = player and tonumber(tostring(player:GetGUID())) or nil }
+
+    if not cc_enableMailItemLog then
+        say("RESTORE_LOG_DISABLED")
+        return
+    end
+    if commandArray[startIdx] == nil then
+        cc_sendRevokeSyntax(say)
+        return
+    end
+
+    local targetName = cc_normalizeCharacterName(commandArray[startIdx])
+    local execute, copyFilter, logId, kick, purge = false, nil, nil, false, false
+    for n = startIdx + 1, startIdx + 5 do
+        local token = commandArray[n] and string.lower(commandArray[n])
+        if token == nil then
+            break
+        elseif token == "all" then
+            execute = true
+        elseif token == "--kick" then
+            kick = true
+        elseif token == "--clear" then
+            purge = true
+        elseif token:match("^#%d+$") then
+            logId = tonumber(token:sub(2))
+            execute = true
+        elseif tonumber(token) ~= nil then
+            copyFilter = tonumber(token)
+        else
+            cc_sendRevokeSyntax(say)
+            return
+        end
+    end
+
+    local q = CharDBQuery("SELECT `guid`, `online` FROM `characters` WHERE `name` = "..cc_sqlQuote(targetName).." LIMIT 1;")
+    if q == nil then
+        say("RESTORE_CHAR_NOT_FOUND", targetName)
+        return
+    end
+    local targetGuid, targetOnline = q:GetUInt32(0), q:GetUInt8(1)
+    local isOnline = targetOnline ~= 0 or GetPlayerByGUID(targetGuid) ~= nil
+
+    local function finish()
+        if kicked then
+            cc_liftCarbonCopyBan(targetGuid)
+        end
+    end
+
+    if execute then
+        if cc_restoreBusy[targetGuid] then
+            say("RESTORE_BUSY", targetName)
+            finish()
+            return
+        end
+        if cc_requireOffline(targetName, targetGuid, isOnline, kick, kicked, admin, say, CC_BAN_REASON_REVOKE,
+            "REVOKE_ONLINE", "REVOKE_KICKING", "REVOKE_NOT_OFFLINE",
+            function(notify) cc_execRevokeCommand(nil, notify, commandArray, startIdx, admin, true) end) then
+            return
+        end
+    end
+
+    local sql = 'SELECT `id`, `copy_id`, `kind`, `item_entry`, `item_guid`, DATE_FORMAT(`created_at`, "%Y-%m-%d %H:%i") '
+        ..'FROM `'..Config.customDbName..'`.`'..cc_mailItemsTable..'` '
+        ..'WHERE `target_guid` = '..targetGuid..' AND `superseded_by_id` IS NULL AND `revoked_at` IS NULL'
+    if copyFilter ~= nil then
+        sql = sql..' AND `copy_id` = '..copyFilter
+    end
+    if logId ~= nil then
+        sql = sql..' AND `id` = '..logId
+    end
+    q = CharDBQuery(sql..' ORDER BY `id`;')
+    if q == nil then
+        if copyFilter ~= nil then
+            say("RESTORE_NO_ITEMS_COPY", targetName, copyFilter)
+        else
+            say("RESTORE_NO_ITEMS", targetName)
+        end
+        finish()
+        return
+    end
+
+    local remove, gone, skip = {}, {}, {}
+    local rows = {}
+    repeat
+        local row = { id = q:GetUInt32(0), copyId = q:GetUInt32(1), kind = q:GetString(2), entry = q:GetUInt32(3),
+            itemGuid = q:GetUInt32(4), createdAt = q:GetString(5) }
+        local missing, whereKey, whereValue = cc_locateMailedItem(row.itemGuid, targetGuid)
+        row.whereKey, row.whereValue = whereKey, whereValue
+        if CC_REVOKABLE[whereKey] then
+            row.action = "remove"
+            table.insert(remove, row)
+        elseif missing then
+            row.action = "gone"
+            table.insert(gone, row)
+        else
+            row.action = "skip"
+            table.insert(skip, row)
+        end
+        table.insert(rows, row)
+    until not q:NextRow()
+
+    if not execute then
+        say("REVOKE_LIST_HEADER", targetName, targetGuid)
+        if isOnline then
+            say("RESTORE_LIST_ONLINE", targetName)
+        end
+        for _, row in ipairs(rows) do
+            local where
+            if row.whereValue ~= nil then
+                where = cc_t(player, row.whereKey, row.whereValue)
+            else
+                where = cc_t(player, row.whereKey)
+            end
+            local actionKey = (row.action == "remove" and "REVOKE_ROW_REMOVE") or (row.action == "gone" and "REVOKE_ROW_GONE") or "REVOKE_ROW_SKIP"
+            say("RESTORE_LIST_ROW", row.id, row.copyId, row.kind, row.createdAt, cc_itemLabel(player, row.entry), cc_t(player, actionKey, where))
+        end
+        say("REVOKE_LIST_FOOTER", #remove, #gone, #skip, targetName)
+        return
+    end
+
+    if #remove == 0 and #gone == 0 then
+        say("REVOKE_NOTHING", targetName, #skip)
+        finish()
+        return
+    end
+
+    for _, row in ipairs(remove) do
+        cc_deleteMailedItem(row.itemGuid, targetGuid)
+    end
+
+    -- the log rows of taken and already-gone items: deleted (purge) or marked revoked so restore leaves them alone
+    local ids = {}
+    for _, row in ipairs(remove) do table.insert(ids, row.id) end
+    for _, row in ipairs(gone) do table.insert(ids, row.id) end
+    local logTable = '`'..Config.customDbName..'`.`'..cc_mailItemsTable..'`'
+    if purge then
+        CharDBQuery('DELETE FROM '..logTable..' WHERE `id` IN ('..table.concat(ids, ',')..');')
+    else
+        CharDBQuery('UPDATE '..logTable..' SET `revoked_at` = NOW(), `revoked_by` = '..cc_sqlQuote(admin.name)
+            ..' WHERE `id` IN ('..table.concat(ids, ',')..');')
+    end
+
+    finish()
+    say("REVOKE_DONE", #remove, targetName, #gone, #skip, cc_t(player, purge and "REVOKE_LOG_DELETED" or "REVOKE_LOG_MARKED"))
+    cc_logAdmin(admin.name, admin.guid, targetName, targetGuid, nil, CC_ACTION_GM_REVOKE, nil, nil, CC_STATUS_SUCCESS,
+        "Revoked "..#remove.." item(s), "..#gone.." already gone, "..#skip.." skipped"..(purge and ", log rows deleted" or "")
+        ..(kicked and ", kicked" or "")..(logId and (", log #"..logId) or "")..(copyFilter and (", copy "..copyFilter) or ""))
 end
 
 -- Pet numbers for copied hunter pets. The core hands out pet numbers from its own counter (MAX(id) at startup, then +1
@@ -1191,6 +1430,18 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
+        if player == nil and ccSubCommandConsole == "cleanup" then
+            cc_execCleanupCommand(nil, cc_chatSay(nil, chatHandler), commandArray[3])
+            cc_resetVariables()
+            return false
+        end
+
+        if player == nil and ccSubCommandConsole == "revoke" then
+            cc_execRevokeCommand(nil, cc_chatSay(nil, chatHandler), commandArray, 3)
+            cc_resetVariables()
+            return false
+        end
+
         if player == nil and ccSubCommandConsole == "logs" then
             cc_execLogsCommand(chatHandler, commandArray, 3)
             cc_resetVariables()
@@ -1211,6 +1462,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CONFIG"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
+                cc_sendRevokeSyntax(cc_chatSay(player, chatHandler))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_ADDCCTICKETS")) -- Kept for Legacy / Compatibility
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CCACCOUNTTICKETS"))
             chatHandler:SendSysMessage(cc_t(player, "CONSOLE_COPY_INGAME"))
@@ -1248,6 +1500,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             if player:GetGMRank() >= cc_minGMRankForRestore then
                 cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
+                cc_sendRevokeSyntax(cc_chatSay(player, chatHandler))
             end
             cc_resetVariables()
             return false
@@ -1492,6 +1745,28 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 return false
             end
             cc_execRestoreCommand(player, cc_chatSay(player, chatHandler), commandArray, 3)
+            cc_resetVariables()
+            return false
+        end
+
+        if ccSubCommand == "cleanup" then
+            if player:GetGMRank() < cc_minGMRankForRestore then
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
+                cc_resetVariables()
+                return false
+            end
+            cc_execCleanupCommand(player, cc_chatSay(player, chatHandler), commandArray[3])
+            cc_resetVariables()
+            return false
+        end
+
+        if ccSubCommand == "revoke" then
+            if player:GetGMRank() < cc_minGMRankForRestore then
+                chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
+                cc_resetVariables()
+                return false
+            end
+            cc_execRevokeCommand(player, cc_chatSay(player, chatHandler), commandArray, 3)
             cc_resetVariables()
             return false
         end
@@ -1918,6 +2193,10 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         local mailEntries = {}
         for n, entry in ipairs(gearEntries) do
             mailEntries[n] = entry
+        end
+        -- a new character without a Hearthstone gets one with the gear (not logged, it isn't a copied item)
+        if CharDBQuery('SELECT 1 FROM item_instance WHERE owner_guid = '..cc_newCharacter..' AND itemEntry = 6948 LIMIT 1;') == nil then
+            table.insert(mailEntries, 6948)
         end
         if cc_emptySlotFiller > 0 and #mailEntries > 0 then
             local fillTo = #mailEntries <= 12 and 12 or 18
@@ -2376,5 +2655,17 @@ local function cc_OnPlayerLogout(event, player)
 end
 
 -- function to be called when the command hook fires
+-- automatic cleanup of old mailed-items log rows (Config.mailItemLogRetentionDays, 0 = never)
+if cc_enableMailItemLog and cc_mailLogRetentionDays > 0 then
+    local function cc_autoCleanup()
+        local count = cc_cleanupMailLog(cc_mailLogRetentionDays)
+        if count > 0 then
+            PrintInfo("CarbonCopy: deleted "..count.." mailed-items log row(s) older than "..cc_mailLogRetentionDays.." day(s).")
+        end
+    end
+    cc_autoCleanup()
+    CreateLuaEvent(cc_autoCleanup, 86400000, 0)
+end
+
 RegisterPlayerEvent(PLAYER_EVENT_ON_COMMAND, cc_CopyCharacter)
 RegisterPlayerEvent(PLAYER_EVENT_ON_LOGOUT, cc_OnPlayerLogout)

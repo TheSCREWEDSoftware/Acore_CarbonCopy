@@ -19,6 +19,10 @@ Config.enableAdminLogs = true
 -- with .carboncopy restore $characterName [missing|all]. Also auto-creates the table above.
 Config.enableMailItemLog = true
 
+-- Delete mailed-items log entries automatically once they are this many days old (checked at startup and once a day).
+-- 0 = never delete. GMs can also do it by hand with .carboncopy cleanup $days.
+Config.mailItemLogRetentionDays = 0
+
 -- Min GM Level to use the .carboncopy command. Set to 0 for all players.
 Config.minGMRankForCopy = 0
 
