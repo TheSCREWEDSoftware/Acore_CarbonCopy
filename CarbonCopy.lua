@@ -361,7 +361,7 @@ if cc_enableAdminLogs then
         ..'`target_name` VARCHAR(12) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL, '
         ..'`target_guid` INT(11) DEFAULT NULL, '
         ..'`target_level` TINYINT UNSIGNED DEFAULT NULL, '
-        ..'`action_code` TINYINT UNSIGNED NOT NULL COMMENT "3=GM_ADD,4=GM_REMOVE,5=GM_LOOKUP,6=GM_RESTORE,7=GM_REVOKE,8=GM_CLEANUP", '
+        ..'`action_code` TINYINT UNSIGNED NOT NULL COMMENT "3=GM_ADD,4=GM_REMOVE,5=GM_LOOKUP,6=GM_RESTORE,7=GM_REVOKE,8=GM_CLEANUP,9=GM_MOVE", '
         ..'`tickets_before` INT(11) DEFAULT NULL, '
         ..'`tickets_after` INT(11) DEFAULT NULL, '
         ..'`status_code` TINYINT UNSIGNED NOT NULL COMMENT "1=SUCCESS,2=FAILED", '
@@ -385,6 +385,7 @@ local CC_ACTION_GM_LOOKUP = 5
 local CC_ACTION_GM_RESTORE = 6
 local CC_ACTION_GM_REVOKE = 7
 local CC_ACTION_GM_CLEANUP = 8
+local CC_ACTION_GM_MOVE = 9
 
 -- Every item mailed by a copy (or by a restore) with a snapshot of its enchants/gems/suffix, so an admin can re-send it.
 -- A row with superseded_by_id set has been replaced by a restored copy and is no longer considered.
@@ -1563,6 +1564,71 @@ local function cc_newPetId()
     return id
 end
 
+-- Splits a command line into arguments; "quoted text" is one argument (".carboncopy tickets move "1 2" -1").
+local function cc_splitQuotedArgs(text)
+    local args, i, n = {}, 1, #text
+    while i <= n do
+        local c = text:sub(i, i)
+        if c:match("%s") then
+            i = i + 1
+        elseif c == '"' then
+            local close = text:find('"', i + 1, true) or (n + 1)
+            table.insert(args, text:sub(i + 1, close - 1))
+            i = close + 1
+        else
+            local stop = text:find("%s", i) or (n + 1)
+            table.insert(args, text:sub(i, stop - 1))
+            i = stop
+        end
+    end
+    return args
+end
+
+-- .carboncopy tickets move $fromRealms $toRealms   (GM or console)
+-- Moves every account's balance from one realm list to another (e.g. after changing Config.ticketRealms): tickets are
+-- added onto an existing balance in the target list, the starter-ticket flag is kept, the old rows are removed.
+-- Lists like Config.ticketRealms: -1, 1, or several in quotes "1 2 3". 0 is not a realm.
+local function cc_execTicketsMove(player, say, command)
+    local args = cc_splitQuotedArgs(command)
+    local fromArg, toArg = args[4], args[5]
+    if fromArg == nil or toArg == nil or args[6] ~= nil then
+        say("SYNTAX_TICKETS_MOVE")
+        return
+    end
+    local from, fromError = cc_parseTicketRealms(fromArg)
+    local to, toError = cc_parseTicketRealms(toArg)
+    if from == nil or to == nil or fromArg:match("^%s*$") or toArg:match("^%s*$") then
+        say("TICKETS_MOVE_INVALID", (from == nil and fromError) or (to == nil and toError) or "empty realm list")
+        say("SYNTAX_TICKETS_MOVE")
+        return
+    end
+    if from == to then
+        say("TICKETS_MOVE_SAME", from)
+        return
+    end
+
+    local fromSql, toSql = "'"..from.."'", "'"..to.."'"
+    local q = CharDBQuery('SELECT `account_id` FROM '..cc_ticketTableSql..' WHERE `realm_ids` = '..fromSql..';')
+    local count = q ~= nil and q:GetRowCount() or 0
+    if count == 0 then
+        say("TICKETS_MOVE_NONE", from)
+        return
+    end
+    CharDBQuery('INSERT INTO '..cc_ticketTableSql..' (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_ids`) '
+        ..'SELECT `account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, '..toSql..' FROM '..cc_ticketTableSql
+        ..' WHERE `realm_ids` = '..fromSql..' '
+        ..'ON DUPLICATE KEY UPDATE `tickets` = `tickets` + VALUES(`tickets`), '
+        ..'`starter_tickets_given` = GREATEST(`starter_tickets_given`, VALUES(`starter_tickets_given`));')
+    CharDBQuery('DELETE FROM '..cc_ticketTableSql..' WHERE `realm_ids` = '..fromSql..';')
+
+    say("TICKETS_MOVE_DONE", count, from, to)
+    if CC_TICKET_REALMS == from then
+        say("TICKETS_MOVE_STILL_USING", from)
+    end
+    cc_logAdmin(player and player:GetName() or "console", player and tonumber(tostring(player:GetGUID())) or nil, nil, nil, nil,
+        CC_ACTION_GM_MOVE, nil, nil, CC_STATUS_SUCCESS, "Moved "..count.." ticket balance(s) from realms \""..from.."\" to \""..to.."\"")
+end
+
 function cc_CopyCharacter(event, player, command, chatHandler)
     -- shared by the branches below (they used to be globals, cleared again by cc_resetVariables)
     local oldTickets, accountId, Data_SQL, QueryString
@@ -1618,10 +1684,15 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
                 return false
             end
 
             local ticketsAction = string.lower(commandArray[3])
+            if ticketsAction == "move" then
+                cc_execTicketsMove(player, cc_chatSay(player, chatHandler), command)
+                return false
+            end
             if ticketsAction == "add" then
                 if commandArray[4] == nil or commandArray[5] == nil then
                     chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
@@ -1716,6 +1787,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
                 return false
             end
 
@@ -1779,6 +1851,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_CONFIG"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
@@ -1814,6 +1887,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+            chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
             chatHandler:SendSysMessage(cc_t(player, "SYNTAX_LOGS"))
             if player:GetGMRank() >= cc_minGMRankForRestore then
                 cc_sendRestoreSyntax(cc_chatSay(player, chatHandler))
@@ -1883,10 +1957,15 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
                 return false
             end
 
             local ticketsAction = string.lower(commandArray[3])
+            if ticketsAction == "move" then
+                cc_execTicketsMove(player, cc_chatSay(player, chatHandler), command)
+                return false
+            end
             if ticketsAction == "add" then
                 if player:GetGMRank() < Config.minGMRankForTickets then
                     chatHandler:SendSysMessage(cc_t(player, "ERR_NO_PERMISSION"))
@@ -1991,6 +2070,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_LOOKUP"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_ADD"))
                 chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_REMOVE"))
+                chatHandler:SendSysMessage(cc_t(player, "SYNTAX_TICKETS_MOVE"))
                 return false
             end
 

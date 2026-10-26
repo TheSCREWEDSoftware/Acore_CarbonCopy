@@ -553,6 +553,71 @@ L.TICKETS_LOOKUP_RESULT = {
     [8] = "Жетоны CarbonCopy персонажа %s (учётная запись %d): %d",
 }
 
+-- %s = why the realm list is invalid
+L.TICKETS_MOVE_INVALID = {
+    [0] = "Invalid realm list: %s.",
+    [1] = "잘못된 렐름 목록: %s.",
+    [2] = "Liste de royaumes invalide : %s.",
+    [3] = "Ungültige Realmliste: %s.",
+    [4] = "无效的服务器列表：%s。",
+    [5] = "無效的伺服器列表：%s。",
+    [6] = "Lista de reinos no válida: %s.",
+    [7] = "Lista de reinos no válida: %s.",
+    [8] = "Неверный список миров: %s.",
+}
+
+-- %s = realm list
+L.TICKETS_MOVE_SAME = {
+    [0] = "Both realm lists are \"%s\", nothing to move.",
+    [1] = "두 렐름 목록이 모두 \"%s\"입니다. 옮길 것이 없습니다.",
+    [2] = "Les deux listes de royaumes sont \"%s\", rien à déplacer.",
+    [3] = "Beide Realmlisten sind \"%s\", nichts zu verschieben.",
+    [4] = "两个服务器列表都是 \"%s\"，无需移动。",
+    [5] = "兩個伺服器列表都是 \"%s\"，無需移動。",
+    [6] = "Ambas listas de reinos son \"%s\", no hay nada que mover.",
+    [7] = "Ambas listas de reinos son \"%s\", no hay nada que mover.",
+    [8] = "Оба списка миров — \"%s\", переносить нечего.",
+}
+
+-- %s = realm list
+L.TICKETS_MOVE_NONE = {
+    [0] = "No ticket balances for realms \"%s\".",
+    [1] = "렐름 \"%s\"의 티켓 잔액이 없습니다.",
+    [2] = "Aucun solde de tickets pour les royaumes \"%s\".",
+    [3] = "Keine Ticketguthaben für die Realms \"%s\".",
+    [4] = "服务器 \"%s\" 没有票券余额。",
+    [5] = "伺服器 \"%s\" 沒有票券餘額。",
+    [6] = "No hay saldos de tickets para los reinos \"%s\".",
+    [7] = "No hay saldos de tickets para los reinos \"%s\".",
+    [8] = "Нет балансов жетонов для миров \"%s\".",
+}
+
+-- %d = accounts, %s = from list, %s = to list
+L.TICKETS_MOVE_DONE = {
+    [0] = "Moved the ticket balances of %d account(s) from realms \"%s\" to \"%s\".",
+    [1] = "계정 %d개의 티켓 잔액을 렐름 \"%s\"에서 \"%s\"(으)로 옮겼습니다.",
+    [2] = "Soldes de tickets de %d compte(s) déplacés des royaumes \"%s\" vers \"%s\".",
+    [3] = "Ticketguthaben von %d Account(s) von den Realms \"%s\" nach \"%s\" verschoben.",
+    [4] = "已将 %d 个账号的票券余额从服务器 \"%s\" 移到 \"%s\"。",
+    [5] = "已將 %d 個帳號的票券餘額從伺服器 \"%s\" 移到 \"%s\"。",
+    [6] = "Saldos de tickets de %d cuenta(s) movidos de los reinos \"%s\" a \"%s\".",
+    [7] = "Saldos de tickets de %d cuenta(s) movidos de los reinos \"%s\" a \"%s\".",
+    [8] = "Балансы жетонов %d учётн. записей перенесены из миров \"%s\" в \"%s\".",
+}
+
+-- %s = realm list
+L.TICKETS_MOVE_STILL_USING = {
+    [0] = "This realm still uses \"%s\" (Config.ticketRealms): change it and reload ALE, or new balances start there again.",
+    [1] = "이 렐름은 아직 \"%s\"를 사용합니다 (Config.ticketRealms). 설정을 바꾸고 ALE를 다시 불러오지 않으면 새 잔액이 다시 그곳에서 시작됩니다.",
+    [2] = "Ce royaume utilise encore \"%s\" (Config.ticketRealms) : modifiez-le et rechargez ALE, sinon de nouveaux soldes y recommenceront.",
+    [3] = "Dieser Realm verwendet noch \"%s\" (Config.ticketRealms): Ändere es und lade ALE neu, sonst beginnen dort wieder neue Guthaben.",
+    [4] = "此服务器仍在使用 \"%s\"（Config.ticketRealms）：请修改并重新加载 ALE，否则新的余额会再次从那里开始。",
+    [5] = "此伺服器仍在使用 \"%s\"（Config.ticketRealms）：請修改並重新載入 ALE，否則新的餘額會再次從那裡開始。",
+    [6] = "Este reino todavía usa \"%s\" (Config.ticketRealms): cámbialo y recarga ALE, o los nuevos saldos volverán a empezar ahí.",
+    [7] = "Este reino todavía usa \"%s\" (Config.ticketRealms): cámbialo y recarga ALE, o los nuevos saldos volverán a empezar ahí.",
+    [8] = "Этот мир всё ещё использует \"%s\" (Config.ticketRealms): измените его и перезагрузите ALE, иначе новые балансы снова начнутся там.",
+}
+
 -- ---------------------------------------------------------------------------
 -- .carboncopy restore (GM / console)
 -- ---------------------------------------------------------------------------
@@ -959,6 +1024,7 @@ L.SYNTAX_CONFIG           = { [0] = "Syntax: .carboncopy config" }
 L.SYNTAX_TICKETS_LOOKUP   = { [0] = "Syntax: .carboncopy tickets lookup $characterName" }
 L.SYNTAX_TICKETS_ADD      = { [0] = "Syntax: .carboncopy tickets add $characterName $amount" }
 L.SYNTAX_TICKETS_REMOVE   = { [0] = "Syntax: .carboncopy tickets remove $characterName $amount" }
+L.SYNTAX_TICKETS_MOVE     = { [0] = "Syntax: .carboncopy tickets move $fromRealms $toRealms   (-1, 1, or several in quotes \"1 2 3\"; moves every balance)" }
 L.SYNTAX_LOGS             = { [0] = "Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]" }
 L.SYNTAX_RESTORE_LIST     = { [0] = "Syntax: .carboncopy restore $characterName                                   (list mailed items and where they are now)" }
 L.SYNTAX_RESTORE_MISSING  = { [0] = "Syntax: .carboncopy restore $characterName missing [copyId] [--kick] [--clear]  (re-send only items that no longer exist)" }
