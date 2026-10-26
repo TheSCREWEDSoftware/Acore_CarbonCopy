@@ -45,6 +45,27 @@ local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
 -- true: copied / restored items get the soulbound flag added. false: they keep exactly the original item's flags.
 local cc_makeCopySoulbounded = Config.makeCopySoulbounded ~= false
 
+-- Where the new character starts after a copy (Config.teleportToCapital). Defaults if the config doesn't set them.
+local cc_teleportToCapital = Config.teleportToCapital ~= false
+local cc_allianceRaces = Config.allianceRaces or { 1, 3, 4, 7, 11 }
+local cc_hordeRaces = Config.hordeRaces or { 2, 5, 6, 8, 10 }
+local cc_capitalPositions = Config.capitalPositions or {
+    alliance = { map = 0, zone = 1519, x = -8865.09,   y = 671.793,   z = 97.9034,   o = 2.16098 },  -- Stormwind, Trade District
+    horde    = { map = 1, zone = 1637, x = 1633.8,     y = -4440.47,  z = 15.634,    o = 3.08343 },  -- Orgrimmar, Valley of Strength
+    neutral  = { map = 0, zone = 33,   x = -14468.104, y = 483.00665, z = 26.776731, o = 0.0 },      -- Booty Bay
+}
+
+-- Capital position for a race: alliance / horde list, anything else gets the neutral one.
+local function cc_capitalForRace(race)
+    for _, r in ipairs(cc_allianceRaces) do
+        if r == race then return cc_capitalPositions.alliance end
+    end
+    for _, r in ipairs(cc_hordeRaces) do
+        if r == race then return cc_capitalPositions.horde end
+    end
+    return cc_capitalPositions.neutral
+end
+
 -- SQL for the flags of a copied item, from the original's flags (column or number).
 local function cc_copyFlagsSql(sourceFlags)
     if cc_makeCopySoulbounded then
@@ -2005,6 +2026,18 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         QueryString = nil
         Data_SQL = nil
         local Data_SQL = CharDBQuery('UPDATE characters SET cinematic = 1 WHERE guid = '..cc_newCharacter..';');
+
+        -- start the new character in its faction's capital (Config.teleportToCapital)
+        if cc_teleportToCapital then
+            local pos = cc_capitalForRace(sourceRace)
+            if pos ~= nil then
+                CharDBQuery('UPDATE `characters` SET `map` = '..tonumber(pos.map)..', `zone` = '..tonumber(pos.zone)
+                    ..', `position_x` = '..tonumber(pos.x)..', `position_y` = '..tonumber(pos.y)..', `position_z` = '..tonumber(pos.z)
+                    ..', `orientation` = '..tonumber(pos.o or 0)..', `instance_id` = 0, `instance_mode_mask` = 0'
+                    ..', `trans_x` = 0, `trans_y` = 0, `trans_z` = 0, `trans_o` = 0, `transguid` = 0'
+                    ..' WHERE `guid` = '..cc_newCharacter..';')
+            end
+        end
 
         coroutine.yield()
         -- Copy achivements level ups 10, 20, 30, 40, 50, 60, 70 or 80 if they exist and use carboncopy sucess timestamp when it was "obtained".

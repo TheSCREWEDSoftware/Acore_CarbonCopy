@@ -71,6 +71,20 @@ Config.copyEquipmentSets = false
 -- false = keep exactly the original item's flags (a soulbound original gives a soulbound copy, an unbound BoE stays unbound).
 Config.makeCopySoulbounded = true
 
+-- Put the new character in its faction's capital after the copy (true = yes | false = no, it stays where it was created).
+Config.teleportToCapital = true
+
+-- Which races go to which capital. Races in neither list (e.g. custom races) go to the neutral position.
+Config.allianceRaces = { 1, 3, 4, 7, 11 }   -- Human, Dwarf, Night Elf, Gnome, Draenei
+Config.hordeRaces    = { 2, 5, 6, 8, 10 }   -- Orc, Undead, Tauren, Troll, Blood Elf
+
+-- map, zone, x, y, z, o (orientation)
+Config.capitalPositions = {
+    alliance = { map = 0, zone = 1519, x = -8865.09,   y = 671.793,   z = 97.9034,   o = 2.16098 },  -- Stormwind, Trade District
+    horde    = { map = 1, zone = 1637, x = 1633.8,     y = -4440.47,  z = 15.634,    o = 3.08343 },  -- Orgrimmar, Valley of Strength
+    neutral  = { map = 0, zone = 33,   x = -14468.104, y = 483.00665, z = 26.776731, o = 0.0 },      -- Booty Bay
+}
+
 -- Here you can adjust the cost in tickets if Config.ticketCost is set to "level"
 ticket_Cost[19] = 1
 ticket_Cost[29] = 1
