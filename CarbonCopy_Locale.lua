@@ -823,6 +823,19 @@ L.RESTORE_DONE_CLEARED = {
     [8] = "Восстановление CarbonCopy: отправлено предметов: %d персонажу %s (%s). Записи журнала удалены. %s снова может войти в игру.",
 }
 
+-- %s = character name
+L.RESTORE_TIMEOUT = {
+    [0] = "CarbonCopy restore: the mail for %s wasn't saved in time, so enchants and gems were not applied and nothing was logged. Check the character's mail before restoring again.",
+    [1] = "CarbonCopy 복구: %s의 우편이 제시간에 저장되지 않아 마법부여와 보석이 적용되지 않았고 기록도 남지 않았습니다. 다시 복구하기 전에 캐릭터의 우편을 확인하세요.",
+    [2] = "Restauration CarbonCopy : le courrier pour %s n'a pas été enregistré à temps ; enchantements et gemmes non appliqués, rien n'a été journalisé. Vérifiez le courrier du personnage avant de restaurer à nouveau.",
+    [3] = "CarbonCopy-Wiederherstellung: Die Post für %s wurde nicht rechtzeitig gespeichert, Verzauberungen und Edelsteine wurden nicht angewendet und nichts protokolliert. Prüfe die Post des Charakters, bevor du erneut wiederherstellst.",
+    [4] = "CarbonCopy 恢复：%s 的邮件未能及时保存，附魔和宝石未应用，也没有记录。再次恢复前请先检查该角色的邮件。",
+    [5] = "CarbonCopy 恢復：%s 的郵件未能及時儲存，附魔和寶石未套用，也沒有紀錄。再次恢復前請先檢查該角色的郵件。",
+    [6] = "Restauración CarbonCopy: el correo para %s no se guardó a tiempo; no se aplicaron encantamientos ni gemas y no se registró nada. Revisa el correo del personaje antes de restaurar de nuevo.",
+    [7] = "Restauración CarbonCopy: el correo para %s no se guardó a tiempo; no se aplicaron encantamientos ni gemas y no se registró nada. Revisa el correo del personaje antes de restaurar de nuevo.",
+    [8] = "Восстановление CarbonCopy: почта для %s не сохранилась вовремя, зачарования и самоцветы не применены, запись не сделана. Проверьте почту персонажа перед повторным восстановлением.",
+}
+
 -- ---------------------------------------------------------------------------
 -- .carboncopy revoke (GM / console): take back items still unclaimed in the mailbox
 -- ---------------------------------------------------------------------------

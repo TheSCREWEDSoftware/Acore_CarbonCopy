@@ -112,6 +112,8 @@ local CC_BAN_REASON_REVOKE = "CarbonCopy revoke"
 -- its mail is saved, so the lock only lasts as long as the work really takes.
 local CC_POLL_MS = math.max(50, tonumber(Config.pollIntervalMs) or 250)
 local CC_POLL_MAX = math.max(1, tonumber(Config.pollMaxAttempts) or 60)
+-- How long a lock lasts if the script never lifts it: the longest wait (polling) plus 30 s, at least 45 s.
+local CC_LOCK_SECONDS = math.max(45, math.ceil(CC_POLL_MS * CC_POLL_MAX / 1000) + 30)
 
 -- "Never expires" = 2038-01-01. Kept below 2^31 so no signed 32-bit time math (core or client) can overflow it.
 local CC_MAIL_NEVER_EXPIRES = 2145916800
@@ -250,6 +252,12 @@ local function cc_sqlQuote(value)
 
     local escaped = tostring(value):gsub("\\", "\\\\"):gsub("'", "''")
     return "'"..escaped.."'"
+end
+
+-- A ticket amount from a command: a whole number from 0 to 1000.
+local function cc_validTicketAmount(text)
+    local amount = tonumber(text)
+    return amount ~= nil and amount == math.floor(amount) and amount >= 0 and amount <= 1000
 end
 
 local function cc_sqlNumber(value)
@@ -602,12 +610,34 @@ end
 
 -- Lifts the temporary lock the script put on a character (never touches other bans).
 -- The core only checks character_banned.active at login, so this unlocks immediately.
-local function cc_liftCarbonCopyBan(characterGuid)
+-- Locks a character out (login is refused while it has an active character_banned row) and kicks it if online.
+-- Written directly and synchronously instead of with Ban(): the core's BanCharacter first deactivates every other
+-- ban on the character (a real ban would be lost), and it writes asynchronously (a lift right after could miss it).
+-- The row expires on its own after CC_LOCK_SECONDS in case the script never lifts it.
+local function cc_lockCharacter(characterGuid, reason, by)
+    CharDBQuery('INSERT IGNORE INTO `character_banned` (`guid`, `bandate`, `unbandate`, `bannedby`, `banreason`, `active`) VALUES ('
+        ..characterGuid..', UNIX_TIMESTAMP(), UNIX_TIMESTAMP() + '..CC_LOCK_SECONDS..', '..cc_sqlQuote(string.sub(tostring(by), 1, 50))
+        ..', '..cc_sqlQuote(reason)..', 1);')
+    local online = GetPlayerByGUID(characterGuid)
+    if online ~= nil then
+        online:KickPlayer()
+    end
+end
+
+-- Lifts the lock the script put on a character. Only rows with this script's reason are touched, never other bans.
+-- reason: one of the CC_BAN_REASON_* (nil = all three).
+local function cc_liftCarbonCopyBan(characterGuid, reason)
     if characterGuid == nil or characterGuid == 0 then
         return
     end
+    local reasons
+    if reason ~= nil then
+        reasons = cc_sqlQuote(reason)
+    else
+        reasons = cc_sqlQuote(CC_BAN_REASON_COPY)..', '..cc_sqlQuote(CC_BAN_REASON_RESTORE)..', '..cc_sqlQuote(CC_BAN_REASON_REVOKE)
+    end
     CharDBQuery('UPDATE `character_banned` SET `active` = 0 WHERE `guid` = '..characterGuid..' AND `active` = 1 '
-        ..'AND `banreason` IN ('..cc_sqlQuote(CC_BAN_REASON_COPY)..', '..cc_sqlQuote(CC_BAN_REASON_RESTORE)..', '..cc_sqlQuote(CC_BAN_REASON_REVOKE)..');')
+        ..'AND `banreason` IN ('..reasons..');')
 end
 
 -- Column names of a characters-database table, in order (read once from information_schema).
@@ -629,8 +659,9 @@ end
 
 -- Copies the rows of tableName matching whereSql into the same table in one INSERT ... SELECT, with some columns
 -- replaced (overrides: column = value). One statement on one connection, so it works with any SynchThreads setting
--- (the old temporary tables only existed on the connection that created them). Errors stop the copy (and refund).
-local function cc_copyRows(tableName, whereSql, overrides)
+-- (the old temporary tables only existed on the connection that created them). targetWhereSql selects the copied
+-- rows; if fewer arrive than the source has, it raises an error so the copy stops (and refunds) instead of going on.
+local function cc_copyRows(tableName, whereSql, overrides, targetWhereSql)
     local columns = cc_tableColumns(tableName)
     if #columns == 0 then
         error("no columns found for table "..tableName)
@@ -646,6 +677,14 @@ local function cc_copyRows(tableName, whereSql, overrides)
     end
     CharDBQuery('INSERT INTO `'..tableName..'` ('..table.concat(names, ', ')..') SELECT '..table.concat(values, ', ')
         ..' FROM `'..tableName..'` WHERE '..whereSql..';')
+    -- CharDBQuery only logs a failed statement, so compare row counts to catch it and stop the copy
+    local source = CharDBQuery('SELECT 1 FROM `'..tableName..'` WHERE '..whereSql..';')
+    local target = CharDBQuery('SELECT 1 FROM `'..tableName..'` WHERE '..targetWhereSql..';')
+    local sourceCount = source ~= nil and source:GetRowCount() or 0
+    local targetCount = target ~= nil and target:GetRowCount() or 0
+    if targetCount < sourceCount then
+        error("copying "..tableName.." failed ("..targetCount.." of "..sourceCount.." rows), see the SQL error in the server log")
+    end
 end
 
 local function cc_itemExists(entry)
@@ -653,9 +692,10 @@ local function cc_itemExists(entry)
 end
 
 -- Mails one of each entry to the receiver, 12 items per mail (GM stationery).
--- Returns the new item guids in the same order as entries (nil where a mail failed).
+-- Returns the new item guids in the same order as entries (nil where a mail failed), mails sent, mails failed.
 local function cc_sendItemMails(receiverGuid, subject, body, entries)
     local guids = {}
+    local sent, failed = 0, 0
     local first = 1
     while first <= #entries do
         local last = math.min(first + 11, #entries)
@@ -666,15 +706,17 @@ local function cc_sendItemMails(receiverGuid, subject, body, entries)
         end
         local result = { pcall(SendMail, cc_unpack(args)) }
         if result[1] then
+            sent = sent + 1
             for n = first, last do
                 guids[n] = result[n - first + 2]
             end
         else
+            failed = failed + 1
             PrintError("CarbonCopy: SendMail to "..receiverGuid.." failed: "..tostring(result[2]))
         end
         first = last + 1
     end
-    return guids
+    return guids, sent, failed
 end
 
 -- SendMail commits asynchronously: true once every item is visible in mail_items.
@@ -829,9 +871,18 @@ local function cc_finishRestore(job)
         table.insert(newGuids, pair.newGuid)
     end
 
-    if not cc_mailItemsCommitted(newGuids) and job.attempts < CC_POLL_MAX then
-        job.attempts = job.attempts + 1
-        CreateLuaEvent(function() cc_finishRestore(job) end, CC_POLL_MS, 1)
+    if not cc_mailItemsCommitted(newGuids) then
+        if job.attempts < CC_POLL_MAX then
+            job.attempts = job.attempts + 1
+            CreateLuaEvent(function() cc_finishRestore(job) end, CC_POLL_MS, 1)
+            return
+        end
+        -- the mails never showed up in the database: nothing to patch or log, tell the admin instead of "done"
+        cc_liftCarbonCopyBan(job.targetGuid, CC_BAN_REASON_RESTORE)
+        cc_restoreBusy[job.targetGuid] = nil
+        cc_notifyAdmin(job.adminGuid, "RESTORE_TIMEOUT", job.targetName)
+        cc_logAdmin(job.adminName, job.adminGuid, job.targetName, job.targetGuid, nil, CC_ACTION_GM_RESTORE, nil, nil,
+            CC_STATUS_FAILED, "Restore mails not saved in time, enchants not applied, nothing logged")
         return
     end
 
@@ -863,7 +914,7 @@ local function cc_finishRestore(job)
       end
     end
 
-    cc_liftCarbonCopyBan(job.targetGuid)
+    cc_liftCarbonCopyBan(job.targetGuid, CC_BAN_REASON_RESTORE)
     cc_restoreBusy[job.targetGuid] = nil
     cc_notifyAdmin(job.adminGuid, job.clear and "RESTORE_DONE_CLEARED" or "RESTORE_DONE", #job.pairs, job.targetName, job.mode, job.targetName)
     cc_logAdmin(job.adminName, job.adminGuid, job.targetName, job.targetGuid, nil, CC_ACTION_GM_RESTORE, nil, nil,
@@ -881,7 +932,7 @@ local function cc_requireOffline(targetName, targetGuid, isOnline, kick, kicked,
         say(onlineKey, targetName)
         return true
     end
-    Ban(1, targetName, 45, banReason, admin.name)
+    cc_lockCharacter(targetGuid, banReason, admin.name)
     say(kickingKey, targetName)
     local notify = function(key, ...) cc_notifyAdmin(admin.guid, key, ...) end
     local tries = 0
@@ -895,7 +946,7 @@ local function cc_requireOffline(targetName, targetGuid, isOnline, kick, kicked,
             CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
         else
             notify(timeoutKey, targetName)
-            cc_liftCarbonCopyBan(targetGuid)
+            cc_liftCarbonCopyBan(targetGuid, banReason)
         end
     end
     CreateLuaEvent(waitOffline, CC_POLL_MS, 1)
@@ -949,8 +1000,8 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
     -- stop here without restoring; unlocks the character if we kicked/locked it
     local function abort(key, ...)
         say(key, ...)
-        if kicked then
-            cc_liftCarbonCopyBan(targetGuid)
+        if kicked and not cc_restoreBusy[targetGuid] then
+            cc_liftCarbonCopyBan(targetGuid, CC_BAN_REASON_RESTORE)
         end
     end
 
@@ -1044,7 +1095,7 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
 
     -- keep the character offline while the mail and enchants are written (lifted by cc_finishRestore)
     if not kicked then
-        Ban(1, targetName, 45, CC_BAN_REASON_RESTORE, admin.name)
+        cc_lockCharacter(targetGuid, CC_BAN_REASON_RESTORE, admin.name)
     end
 
     -- the mail is in the target account's client language
@@ -1071,7 +1122,7 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
 
     if #job.pairs == 0 then
         say("RESTORE_NONE_MAILED")
-        cc_liftCarbonCopyBan(targetGuid)
+        cc_liftCarbonCopyBan(targetGuid, CC_BAN_REASON_RESTORE)
         return
     end
 
@@ -1168,8 +1219,8 @@ local function cc_execRevokeCommand(player, say, commandArray, startIdx, admin, 
     local isOnline = targetOnline ~= 0 or GetPlayerByGUID(targetGuid) ~= nil
 
     local function finish()
-        if kicked then
-            cc_liftCarbonCopyBan(targetGuid)
+        if kicked and not cc_restoreBusy[targetGuid] then
+            cc_liftCarbonCopyBan(targetGuid, CC_BAN_REASON_REVOKE)
         end
     end
 
@@ -1354,7 +1405,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
+                if not cc_validTicketAmount(commandArray[5]) then
                     chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets add", commandArray[5]))
                     return false
                 end
@@ -1399,7 +1450,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
+                if not cc_validTicketAmount(commandArray[5]) then
                     chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets remove", commandArray[5]))
                     return false
                 end
@@ -1560,7 +1611,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), oldTickets, oldTickets, CC_STATUS_SUCCESS, "Ticket balance lookup")
             else
                 oldTickets = Config.freeTickets
-                CharDBExecute('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
+                CharDBQuery('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), 0, Config.freeTickets, CC_STATUS_FREE_CONFIG_TICKET, "Free config ticket granted")
             end
             -- ticket cost list and map warning first, the most important lines last
@@ -1622,7 +1673,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
+                if not cc_validTicketAmount(commandArray[5]) then
                     chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets add", commandArray[5]))
                     return false
                 end
@@ -1672,7 +1723,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                     return false
                 end
 
-                if tonumber(commandArray[5]) == nil or tonumber(commandArray[5]) > 1000 or tonumber(commandArray[5]) < 0 then
+                if not cc_validTicketAmount(commandArray[5]) then
                     chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".carboncopy tickets remove", commandArray[5]))
                     return false
                 end
@@ -1832,7 +1883,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             availableTickets = Data_SQL:GetUInt32(0)
             Data_SQL = nil
         else
-            CharDBExecute('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
+            CharDBQuery('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..Config.freeTickets..', 0) ;')
             availableTickets = Config.freeTickets
         end
 
@@ -1942,8 +1993,9 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         -------------- COPY SCRIPT STARTS HERE ---------------------
         --set Global variable to prevent simultaneous action and lock the target.
         --The ban is lifted by cc_fixItems as soon as the copy is done; 45s is only the fallback if that never runs.
-        Ban(1, targetName, 45, CC_BAN_REASON_COPY, "CarbonCopy" )
+        cc_lockCharacter(newCharacter, CC_BAN_REASON_COPY, "CarbonCopy")
         cc_scriptIsBusy = 1
+        cc_copyStartedAt = os.time()   -- set together with the busy lock, so the watchdog can always clear it
         cc_newCharacter = newCharacter
         cc_newCharacterName = targetName
         cc_copyTicketsBefore = availableTickets
@@ -1955,7 +2007,8 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         player:SaveToDB()
 
         --fetch all required variables before 1st yield
-        cc_playerString = player:GetClassAsString(0)
+        -- by class id: GetClassAsString(0) is empty when the server's DBC files aren't enUS
+        cc_playerString = ({ [3] = "Hunter", [7] = "Shaman" })[player:GetClass()] or "Other"
         cc_logPlayer(sourceName, sourceGuid, targetName, cc_newCharacter, player:GetLevel(), availableTickets, availableTickets - requiredTickets, CC_STATUS_SUCCESS, "Copy started")
         PrintInfo("1) The player with GUID "..cc_playerGUID.." has succesfully initiated the .carboncopy command. Target character: "..cc_newCharacter);
         chatHandler:SendSysMessage(cc_t(player, "COPY_STARTED", requiredTickets, availableTickets - requiredTickets))
@@ -2065,9 +2118,9 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 local cc_targetPetId = cc_newPetId()
 
                 CharDBQuery('DELETE FROM character_pet WHERE owner = '..cc_newCharacter..';')
-                cc_copyRows('character_pet', 'id = '..cc_playerPetId, { id = cc_targetPetId, owner = cc_newCharacter, slot = 0 })
+                cc_copyRows('character_pet', 'id = '..cc_playerPetId, { id = cc_targetPetId, owner = cc_newCharacter, slot = 0 }, 'id = '..cc_targetPetId)
                 CharDBQuery('DELETE FROM pet_spell WHERE guid = '..cc_targetPetId..';')
-                cc_copyRows('pet_spell', 'guid = '..cc_playerPetId, { guid = cc_targetPetId })
+                cc_copyRows('pet_spell', 'guid = '..cc_playerPetId, { guid = cc_targetPetId }, 'guid = '..cc_targetPetId)
             end
         elseif cc_playerString == "Shaman" then
             -- only the totems the source character owns, in their own mail
@@ -2087,9 +2140,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             cc_totemMailGuids = {}
             cc_totemItemGuids = {}
             if #totems > 0 then
-                cc_copyMailed = true
-                local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_TOTEMS_SUBJECT"),
+                local guids, sent, failed = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_TOTEMS_SUBJECT"),
                     (cc_legacyMailText and ("Hello "..targetName..cc_legacyMailText) or cc_tl(cc_copyLocale, "MAIL_TOTEMS_BODY", targetName, cc_mailSignature)), totems)
+                if sent > 0 then
+                    cc_copyMailed = true
+                end
+                if failed > 0 then
+                    error("the totem mail could not be sent")
+                end
                 for n = 1, #totems do
                     if guids[n] ~= nil then
                         table.insert(cc_totemMailGuids, guids[n])
@@ -2104,31 +2162,31 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         coroutine.yield()
         --Copy quests
         local Data_SQL = CharDBQuery('DELETE FROM character_queststatus_rewarded WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_queststatus_rewarded', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_queststatus_rewarded', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         coroutine.yield()
         --Copy reputation
         local Data_SQL = CharDBQuery('DELETE FROM character_reputation WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_reputation', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_reputation', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         coroutine.yield()
         --Copy skills
         local Data_SQL = CharDBQuery('DELETE FROM character_skills WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_skills', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_skills', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         coroutine.yield()
         --Copy spells
         local Data_SQL = CharDBQuery('DELETE FROM character_spell WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_spell', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_spell', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         coroutine.yield()
         --Copy talents
         local Data_SQL = CharDBQuery('DELETE FROM character_talent WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_talent', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_talent', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         -- Config.resetTalentsAfterCopy: the core resets the active spec at first login (AT_LOGIN_RESET_TALENTS, it
@@ -2151,13 +2209,13 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         coroutine.yield()
         --Copy glyphs
         local Data_SQL = CharDBQuery('DELETE FROM character_glyphs WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_glyphs', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_glyphs', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         coroutine.yield()
         --Copy actions
         local Data_SQL = CharDBQuery('DELETE FROM character_action WHERE guid = '..cc_newCharacter..';')
-        cc_copyRows('character_action', 'guid = '..cc_playerGUID, { guid = cc_newCharacter })
+        cc_copyRows('character_action', 'guid = '..cc_playerGUID, { guid = cc_newCharacter }, 'guid = '..cc_newCharacter)
         Data_SQL = nil
 
         coroutine.yield()
@@ -2210,9 +2268,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
         end
         if #mailEntries > 0 then
-            cc_copyMailed = true
-            local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_GEAR_SUBJECT"),
+            local guids, sent, failed = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_GEAR_SUBJECT"),
                 (cc_legacyMailText and ("Hello "..targetName..cc_legacyMailText) or cc_tl(cc_copyLocale, "MAIL_GEAR_BODY", targetName, cc_mailSignature)), mailEntries)
+            if sent > 0 then
+                cc_copyMailed = true
+            end
+            if failed > 0 then
+                error(failed.." of the gear mails could not be sent")
+            end
             for n = 1, #mailEntries do
                 cc_newItemGuids[n] = guids[n]
             end
@@ -2244,7 +2307,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 return false
             end
 
-            if tonumber(commandArray[3]) > 1000 or tonumber(commandArray[3]) < 0 then
+            if not cc_validTicketAmount(commandArray[3]) then
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".addcctickets", commandArray[3]))
                 return false
             end
@@ -2291,7 +2354,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 return false
             end
 
-            if tonumber(commandArray[3]) > 1000 or tonumber(commandArray[3]) < 0 then
+            if not cc_validTicketAmount(commandArray[3]) then
                 chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".addcctickets", commandArray[3]))
                 return false
             end
@@ -2342,7 +2405,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         -- whole number 0-1000 only; anything else used to throw a Lua error and give SOAP no reply
         local amount = tonumber(commandArray[3])
-        if amount == nil or amount ~= math.floor(amount) or amount > 1000 or amount < 0 then
+        if not cc_validTicketAmount(commandArray[3]) then
             chatHandler:SendSysMessage(cc_t(player, "TICKETS_BAD_AMOUNT", ".CCACCOUNTTICKETS", commandArray[3]))
             return false
         end
@@ -2360,7 +2423,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             return false
         end
 
-        CharDBExecute('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..(amount + oldTickets)..', 0) ;')
+        CharDBQuery('REPLACE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` VALUES ('..accountId..', '..(amount + oldTickets)..', 0) ;')
         cc_logAdmin("console", nil, commandArray[2], nil, nil, CC_ACTION_GM_ADD, oldTickets, oldTickets + amount, CC_STATUS_SUCCESS, "CCACCOUNTTICKETS success")
         return false
     elseif player ~= nil then
@@ -2388,7 +2451,7 @@ function cc_copyFailed(stage, err)
             end
         end
         if cc_newCharacter ~= nil and cc_newCharacter ~= 0 then
-            cc_liftCarbonCopyBan(cc_newCharacter)
+            cc_liftCarbonCopyBan(cc_newCharacter, CC_BAN_REASON_COPY)
         end
 
         cc_logPlayer(cc_copySourceName or cc_characterNameByGuid(cc_playerGUID), cc_playerGUID, cc_newCharacterName,
@@ -2452,10 +2515,14 @@ function cc_fixItemsStep()
     for _, guid in ipairs(cc_totemMailGuids) do
         table.insert(mailedGuids, guid)
     end
-    if not cc_mailItemsCommitted(mailedGuids) and cc_fixItemsAttempts < CC_POLL_MAX then
-        cc_fixItemsAttempts = cc_fixItemsAttempts + 1
-        CreateLuaEvent(cc_fixItems, CC_POLL_MS, 1)
-        return
+    if not cc_mailItemsCommitted(mailedGuids) then
+        if cc_fixItemsAttempts < CC_POLL_MAX then
+            cc_fixItemsAttempts = cc_fixItemsAttempts + 1
+            CreateLuaEvent(cc_fixItems, CC_POLL_MS, 1)
+            return
+        end
+        -- never saved: stop here (cc_copyFailed via cc_fixItems) instead of reporting a copy without enchants as done
+        error("the copy mails were not saved within "..(CC_POLL_MS * CC_POLL_MAX / 1000).." seconds")
     end
     cc_fixItemsAttempts = 0
 
@@ -2486,8 +2553,8 @@ function cc_fixItemsStep()
         if sets_SQL ~= nil then
             repeat
                 local setindex    = sets_SQL:GetUInt8(0)
-                local name        = sets_SQL:GetString(1):gsub("'", "''")
-                local iconname    = sets_SQL:GetString(2):gsub("'", "''")
+                local name        = sets_SQL:GetString(1)
+                local iconname    = sets_SQL:GetString(2)
                 local ignore_mask = sets_SQL:GetUInt32(3)
                 local items = {}
                 for i = 0, 18 do
@@ -2495,7 +2562,7 @@ function cc_fixItemsStep()
                     items[i] = guidMap[oldGuid] or 0
                 end
                 CharDBQuery('INSERT INTO `character_equipmentsets` (`guid`, `setindex`, `name`, `iconname`, `ignore_mask`, `item0`, `item1`, `item2`, `item3`, `item4`, `item5`, `item6`, `item7`, `item8`, `item9`, `item10`, `item11`, `item12`, `item13`, `item14`, `item15`, `item16`, `item17`, `item18`) VALUES ('
-                    ..cc_newCharacter..', '..setindex..', \''..name..'\',' ..' \''..iconname..'\', '..ignore_mask..', '
+                    ..cc_newCharacter..', '..setindex..', '..cc_sqlQuote(name)..', '..cc_sqlQuote(iconname)..', '..ignore_mask..', '
                     ..items[0]..', '..items[1]..', '..items[2]..', '..items[3]..', '..items[4]..', '
                     ..items[5]..', '..items[6]..', '..items[7]..', '..items[8]..', '..items[9]..', '
                     ..items[10]..', '..items[11]..', '..items[12]..', '..items[13]..', '..items[14]..', '
@@ -2523,7 +2590,7 @@ function cc_fixItemsStep()
     cc_totemItemGuids = {}
 
     -- everything is written: unlock the new character and log the success
-    cc_liftCarbonCopyBan(cc_newCharacter)
+    cc_liftCarbonCopyBan(cc_newCharacter, CC_BAN_REASON_COPY)
     local doneTargetName = cc_newCharacterName or cc_characterNameByGuid(cc_newCharacter) or tostring(cc_newCharacter)
     cc_logPlayer(cc_copySourceName or cc_characterNameByGuid(cc_playerGUID), cc_playerGUID, doneTargetName, cc_newCharacter,
         cc_copySourceLevel, cc_copyTicketsBefore, cc_copyTicketsAfter, CC_STATUS_SUCCESS, "Character copied")
