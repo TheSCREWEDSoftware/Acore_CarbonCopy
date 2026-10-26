@@ -47,6 +47,12 @@ Config.minGMRankForRestore = 2
 -- Tickets
 ----------------------------------------------------------------------------------------------------
 
+-- Which ticket balance this realm uses. -1 = one balance per account shared by all realms (worldservers using the
+-- same Config.customDbName). 1 or higher = that realm's own balance, separate from the other realms.
+-- Balances that already exist are given the value set here the first time the script loads with this option;
+-- changing it later starts a separate balance for the new value (the old one stays in the table).
+Config.ticketRealm = -1
+
 -- Starter tickets: an account without tickets gets this many when it creates a character or logs in with any character.
 -- Changing it only affects accounts that haven't received them yet; existing balances are never touched.
 Config.freeTickets = 4

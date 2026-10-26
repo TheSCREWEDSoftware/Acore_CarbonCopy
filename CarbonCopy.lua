@@ -53,6 +53,11 @@ local ticket_Cost = CarbonCopyConfig.ticket_Cost
 -- Settings (see CarbonCopy_Config.lua). Each fallback below is what CarbonCopy did before the option existed,
 -- so an older config file without these keys keeps the old behaviour.
 local cc_carboncopyTable = Config.carboncopyTableName or "carboncopy"
+-- Which ticket balance this realm uses: -1 = one balance shared by all realms, 1 or higher = that realm's own.
+local CC_TICKET_REALM = math.floor(tonumber(Config.ticketRealm) or -1)
+if CC_TICKET_REALM < 1 then
+    CC_TICKET_REALM = -1
+end
 local cc_playerLogsTable = Config.playerLogsTableName or "carboncopy_player_logs"
 local cc_adminLogsTable = Config.adminLogsTableName or "carboncopy_admin_logs"
 local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
@@ -148,9 +153,19 @@ CharDBQuery('CREATE TABLE IF NOT EXISTS `'..Config.customDbName..'`.`'..cc_carbo
     ..'`tickets` INT(11) DEFAULT 0, '
     ..'`allow_copy_from_id` INT(11) DEFAULT 0, '
     ..'`starter_tickets_given` TINYINT(1) NOT NULL DEFAULT 0, '
-    ..'PRIMARY KEY (`account_id`)'
+    ..'`realm_id` INT(11) NOT NULL DEFAULT -1 COMMENT "-1 = shared by all realms", '
+    ..'PRIMARY KEY (`account_id`, `realm_id`)'
     ..') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DEFAULT;'
 )
+-- Tables from before realm_id existed: add it and make it part of the key. The balances already there are given
+-- the realm configured now (Config.ticketRealm), so every player keeps what they have.
+if CharDBQuery("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '"..Config.customDbName.."' AND TABLE_NAME = '"
+    ..cc_carboncopyTable.."' AND COLUMN_NAME = 'realm_id' LIMIT 1;") == nil then
+    CharDBQuery('ALTER TABLE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` ADD COLUMN `realm_id` INT(11) NOT NULL DEFAULT -1 COMMENT "-1 = shared by all realms";')
+    CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET `realm_id` = '..CC_TICKET_REALM..';')
+    CharDBQuery('ALTER TABLE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` DROP PRIMARY KEY, ADD PRIMARY KEY (`account_id`, `realm_id`);')
+end
+
 -- Tables from before starter_tickets_given existed: add it, and mark every existing account as having had its starter
 -- tickets (they got them the first time they used .carboncopy). Rows written later by anything else default to 0.
 if CharDBQuery("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '"..Config.customDbName.."' AND TABLE_NAME = '"
@@ -275,8 +290,8 @@ end
 -- grant running at the same moment is never overwritten. An account that never used .carboncopy has no row yet;
 -- it owns the starter tickets (Config.freeTickets) it would get on its first use, so the change goes on top of those.
 local function cc_changeTickets(accountId, delta)
-    CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`) '
-        ..'VALUES ('..accountId..', '..(Config.freeTickets + delta)..', 0, 1) '
+    CharDBQuery('INSERT INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_id`) '
+        ..'VALUES ('..accountId..', '..(Config.freeTickets + delta)..', 0, 1, '..CC_TICKET_REALM..') '
         ..'ON DUPLICATE KEY UPDATE `tickets` = `tickets` + ('..delta..');')
 end
 
@@ -313,16 +328,16 @@ end
 -- something else created without them (starter_tickets_given = 0, e.g. tickets credited by a website). Returns true if
 -- it granted them. who / reason only go to the player log.
 local function cc_ensureStarterTickets(accountId, who, reason)
-    local q = CharDBQuery('SELECT `starter_tickets_given` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;')
+    local q = CharDBQuery('SELECT `starter_tickets_given` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
     if q ~= nil and q:GetUInt8(0) ~= 0 then
         return false
     end
     if q == nil then
-        CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`) '
-            ..'VALUES ('..accountId..', '..Config.freeTickets..', 0, 1);')
+        CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_id`) '
+            ..'VALUES ('..accountId..', '..Config.freeTickets..', 0, 1, '..CC_TICKET_REALM..');')
     else
         CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET `tickets` = `tickets` + '..Config.freeTickets
-            ..', `starter_tickets_given` = 1 WHERE `account_id` = '..accountId..' AND `starter_tickets_given` = 0;')
+            ..', `starter_tickets_given` = 1 WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' AND `starter_tickets_given` = 0;')
     end
     cc_logPlayer(who and who:GetName() or "console", who and tonumber(tostring(who:GetGUID())) or nil, nil, nil,
         who and who:GetLevel() or nil, nil, nil, CC_STATUS_FREE_CONFIG_TICKET,
@@ -1472,7 +1487,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;')
+                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
@@ -1517,7 +1532,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;')
+                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
@@ -1561,7 +1576,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
             local lookupAccountId = Data_SQL:GetUInt32(0)
             cc_ensureStarterTickets(lookupAccountId, player, "Starter tickets granted before a ticket check")
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..lookupAccountId..' LIMIT 1;')
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..lookupAccountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
             local lookupTickets
             if Data_SQL ~= nil then
                 lookupTickets = Data_SQL:GetUInt32(0)
@@ -1650,18 +1665,18 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         -- print the available tickets
         local accountId = player:GetAccountId()
         cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-        local _ticketsAtEntrySQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;')
+        local _ticketsAtEntrySQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
         local ticketsAtEntry = _ticketsAtEntrySQL ~= nil and _ticketsAtEntrySQL:GetUInt32(0) or Config.freeTickets
         _ticketsAtEntrySQL = nil
         if commandArray[2] == nil then
             local Data_SQL
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;');
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;');
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetUInt32(0)
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), oldTickets, oldTickets, CC_STATUS_SUCCESS, "Ticket balance lookup")
             else
                 oldTickets = Config.freeTickets
-                CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`) VALUES ('..accountId..', '..Config.freeTickets..', 0, 1);')
+                CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_id`) VALUES ('..accountId..', '..Config.freeTickets..', 0, 1, '..CC_TICKET_REALM..');')
                 cc_logPlayer(sourceName, sourceGuid, nil, nil, player:GetLevel(), 0, Config.freeTickets, CC_STATUS_FREE_CONFIG_TICKET, "Free config ticket granted")
             end
             -- ticket cost list and map warning first, the most important lines last
@@ -1742,7 +1757,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 cc_ensureStarterTickets(addAccountId, player, "Starter tickets granted before a ticket check")
-                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..addAccountId..' LIMIT 1;')
+                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..addAccountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
@@ -1792,7 +1807,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 end
 
                 cc_ensureStarterTickets(removeAccountId, player, "Starter tickets granted before a ticket check")
-                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..removeAccountId..' LIMIT 1;')
+                Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..removeAccountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
                 if Data_SQL ~= nil then
                     oldTickets = Data_SQL:GetUInt32(0)
                 else
@@ -1836,7 +1851,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
             local lookupAccountId = Data_SQL:GetUInt32(0)
             cc_ensureStarterTickets(lookupAccountId, player, "Starter tickets granted before a ticket check")
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..lookupAccountId..' LIMIT 1;')
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..lookupAccountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;')
             local lookupTickets
             if Data_SQL ~= nil then
                 lookupTickets = Data_SQL:GetUInt32(0)
@@ -1928,14 +1943,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
 
         --check for available tickets
         cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-        local Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..';');
+        local Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..';');
         local availableTickets
         local requiredTickets
         if Data_SQL ~= nil then
             availableTickets = Data_SQL:GetUInt32(0)
             Data_SQL = nil
         else
-            CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`) VALUES ('..accountId..', '..Config.freeTickets..', 0, 1);')
+            CharDBQuery('INSERT IGNORE INTO `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` (`account_id`, `tickets`, `allow_copy_from_id`, `starter_tickets_given`, `realm_id`) VALUES ('..accountId..', '..Config.freeTickets..', 0, 1, '..CC_TICKET_REALM..');')
             availableTickets = Config.freeTickets
         end
 
@@ -2089,7 +2104,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if Config.ticketCost == "single" then
             requiredTickets = 1
         end
-        CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets -'..requiredTickets..' WHERE `account_id` = '..accountId..';');
+        CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets -'..requiredTickets..' WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..';');
         cc_copyCharged = requiredTickets
 
 
@@ -2375,7 +2390,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = nil
             local Data_SQL
             cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;');
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;');
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetUInt32(0)
             else
@@ -2422,7 +2437,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             Data_SQL = nil
             local Data_SQL
             cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;');
+            Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;');
             if Data_SQL  ~= nil then
                 oldTickets = Data_SQL:GetUInt32(0)
             else
@@ -2465,7 +2480,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         end
 
         cc_ensureStarterTickets(accountId, player, "Starter tickets granted before a ticket check")
-        Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' LIMIT 1;');
+        Data_SQL = CharDBQuery('SELECT `tickets` FROM `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` WHERE `account_id` = '..accountId..' AND `realm_id` = '..CC_TICKET_REALM..' LIMIT 1;');
         if Data_SQL  ~= nil then
             oldTickets = Data_SQL:GetUInt32(0)
         else
@@ -2499,7 +2514,7 @@ function cc_copyFailed(stage, err)
         local refunded = 0
         if cc_copyAccountId ~= nil and (cc_copyCharged or 0) > 0 and not cc_copyMailed then
             CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets + '..cc_copyCharged
-                ..' WHERE `account_id` = '..cc_copyAccountId..';')
+                ..' WHERE `account_id` = '..cc_copyAccountId..' AND `realm_id` = '..CC_TICKET_REALM..';')
             refunded = cc_copyCharged
             if cc_newCharacter ~= nil and cc_newCharacter ~= 0 then
                 CharDBQuery('UPDATE `characters` SET `cinematic` = 0 WHERE `guid` = '..cc_newCharacter..';')
