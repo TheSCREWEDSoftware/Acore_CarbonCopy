@@ -334,6 +334,19 @@ L.COPY_FAILED_REFUNDED = {
     [8] = "Во время копирования произошла ошибка. Жетоны возвращены (%d). Новый персонаж останется заблокированным, пока повторное копирование не пройдёт успешно.",
 }
 
+-- the copy stopped before anything was charged, changed or mailed (e.g. the tickets were used meanwhile)
+L.COPY_FAILED_NOT_CHARGED = {
+    [0] = "The copy could not start: your tickets could not be deducted (not enough tickets left?). Nothing was charged or copied.",
+    [1] = "복사를 시작할 수 없습니다. 티켓을 차감할 수 없었습니다(티켓이 부족한가요?). 아무것도 차감되거나 복사되지 않았습니다.",
+    [2] = "La copie n'a pas pu démarrer : vos tickets n'ont pas pu être déduits (plus assez de tickets ?). Rien n'a été prélevé ni copié.",
+    [3] = "Die Kopie konnte nicht starten: Deine Tickets konnten nicht abgezogen werden (nicht mehr genug Tickets?). Nichts wurde abgezogen oder kopiert.",
+    [4] = "无法开始复制：无法扣除你的票券（票券不足？）。没有扣除或复制任何东西。",
+    [5] = "無法開始複製：無法扣除你的票券（票券不足？）。沒有扣除或複製任何東西。",
+    [6] = "No se pudo iniciar la copia: no se pudieron descontar tus tickets (¿no te quedan suficientes?). No se ha cobrado ni copiado nada.",
+    [7] = "No se pudo iniciar la copia: no se pudieron descontar tus tickets (¿no te quedan suficientes?). No se cobró ni copió nada.",
+    [8] = "Не удалось начать копирование: не удалось списать жетоны (недостаточно жетонов?). Ничего не списано и не скопировано.",
+}
+
 L.COPY_FAILED_CONTACT_GM = {
     [0] = "Something went wrong while finishing the copy. Your items were mailed; please contact a Game Master.",
     [1] = "복사를 마무리하는 중 문제가 발생했습니다. 아이템은 우편으로 발송되었습니다. 게임 마스터에게 문의하세요.",
@@ -553,6 +566,70 @@ L.TICKETS_LOOKUP_RESULT = {
     [8] = "Жетоны CarbonCopy персонажа %s (учётная запись %d): %d",
 }
 
+-- same values as TICKETS_ADDED, the last %s is the account name (.carboncopy tickets add --account)
+L.TICKETS_ADDED_ACCOUNT = {
+    [0] = "%s has successfully used %s, adding %s tickets to the account %d (%s).",
+    [1] = "%s 님이 %s 명령으로 티켓 %s개를 계정 %d(%s)에 추가했습니다.",
+    [2] = "%s a utilisé %s avec succès : %s tickets ajoutés au compte %d (%s).",
+    [3] = "%s hat %s erfolgreich verwendet und %s Tickets zum Account %d (%s) hinzugefügt.",
+    [4] = "%s 已成功使用 %s，添加了 %s 张票券到账号 %d（%s）。",
+    [5] = "%s 已成功使用 %s，新增了 %s 張票券到帳號 %d（%s）。",
+    [6] = "%s ha usado %s con éxito, añadiendo %s tickets a la cuenta %d (%s).",
+    [7] = "%s ha usado %s con éxito, agregando %s tickets a la cuenta %d (%s).",
+    [8] = "%s успешно использовал %s: добавлено жетонов: %s на учётную запись %d (%s).",
+}
+
+L.TICKETS_REMOVED_ACCOUNT = {
+    [0] = "%s has successfully used %s, removing %s tickets from the account %d (%s).",
+    [1] = "%s 님이 %s 명령으로 티켓 %s개를 계정 %d(%s)에서 제거했습니다.",
+    [2] = "%s a utilisé %s avec succès : %s tickets retirés du compte %d (%s).",
+    [3] = "%s hat %s erfolgreich verwendet und %s Tickets vom Account %d (%s) entfernt.",
+    [4] = "%s 已成功使用 %s，移除了 %s 张票券，账号 %d（%s）。",
+    [5] = "%s 已成功使用 %s，移除了 %s 張票券，帳號 %d（%s）。",
+    [6] = "%s ha usado %s con éxito, quitando %s tickets de la cuenta %d (%s).",
+    [7] = "%s ha usado %s con éxito, quitando %s tickets de la cuenta %d (%s).",
+    [8] = "%s успешно использовал %s: снято жетонов: %s с учётной записи %d (%s).",
+}
+
+-- %s = account name, %d = account id, %d = tickets
+L.TICKETS_LOOKUP_RESULT_ACCOUNT = {
+    [0] = "CarbonCopy tickets for account %s (id %d): %d",
+    [1] = "계정 %s의 CarbonCopy 티켓 (ID %d): %d",
+    [2] = "Tickets CarbonCopy du compte %s (id %d) : %d",
+    [3] = "CarbonCopy-Tickets von Account %s (ID %d): %d",
+    [4] = "账号 %s 的 CarbonCopy 票券（ID %d）：%d",
+    [5] = "帳號 %s 的 CarbonCopy 票券（ID %d）：%d",
+    [6] = "Tickets de CarbonCopy de la cuenta %s (id %d): %d",
+    [7] = "Tickets de CarbonCopy de la cuenta %s (id %d): %d",
+    [8] = "Жетоны CarbonCopy учётной записи %s (id %d): %d",
+}
+
+-- %s = account or character name, %s = realm list
+L.TICKETS_MOVE_NONE_ACCOUNT = {
+    [0] = "%s has no ticket balance for realms \"%s\".",
+    [1] = "%s에게 렐름 \"%s\"의 티켓 잔액이 없습니다.",
+    [2] = "%s n'a aucun solde de tickets pour les royaumes \"%s\".",
+    [3] = "%s hat kein Ticketguthaben für die Realms \"%s\".",
+    [4] = "%s 在服务器 \"%s\" 没有票券余额。",
+    [5] = "%s 在伺服器 \"%s\" 沒有票券餘額。",
+    [6] = "%s no tiene saldo de tickets para los reinos \"%s\".",
+    [7] = "%s no tiene saldo de tickets para los reinos \"%s\".",
+    [8] = "У %s нет баланса жетонов для миров \"%s\".",
+}
+
+-- %s = account or character name, %d = tickets moved, %s = from list, %s = to list
+L.TICKETS_MOVE_DONE_ACCOUNT = {
+    [0] = "Moved the ticket balance of %s (%d tickets) from realms \"%s\" to \"%s\". Its balance here is now 0.",
+    [1] = "%s의 티켓 잔액(티켓 %d개)을 렐름 \"%s\"에서 \"%s\"(으)로 옮겼습니다. 이곳의 잔액은 이제 0입니다.",
+    [2] = "Solde de tickets de %s (%d tickets) déplacé des royaumes \"%s\" vers \"%s\". Son solde ici est maintenant de 0.",
+    [3] = "Ticketguthaben von %s (%d Tickets) von den Realms \"%s\" nach \"%s\" verschoben. Das Guthaben hier ist jetzt 0.",
+    [4] = "已将 %s 的票券余额（%d 张）从服务器 \"%s\" 移到 \"%s\"。此处余额现为 0。",
+    [5] = "已將 %s 的票券餘額（%d 張）從伺服器 \"%s\" 移到 \"%s\"。此處餘額現為 0。",
+    [6] = "Saldo de tickets de %s (%d tickets) movido de los reinos \"%s\" a \"%s\". Su saldo aquí ahora es 0.",
+    [7] = "Saldo de tickets de %s (%d tickets) movido de los reinos \"%s\" a \"%s\". Su saldo aquí ahora es 0.",
+    [8] = "Баланс жетонов %s (%d шт.) перенесён из миров \"%s\" в \"%s\". Здесь баланс теперь 0.",
+}
+
 -- %s = why the realm list is invalid
 L.TICKETS_MOVE_INVALID = {
     [0] = "Invalid realm list: %s.",
@@ -634,6 +711,32 @@ L.TICKETS_MOVE_STILL_USING = {
 -- ---------------------------------------------------------------------------
 -- .carboncopy restore (GM / console)
 -- ---------------------------------------------------------------------------
+-- %s = account name (restore / revoke --account)
+L.RESTORE_ACCOUNT_NONE = {
+    [0] = "No character of account %s has logged CarbonCopy items.",
+    [1] = "계정 %s의 캐릭터 중 기록된 CarbonCopy 아이템이 있는 캐릭터가 없습니다.",
+    [2] = "Aucun personnage du compte %s n'a d'objets CarbonCopy enregistrés.",
+    [3] = "Kein Charakter von Account %s hat protokollierte CarbonCopy-Gegenstände.",
+    [4] = "账号 %s 的角色都没有已记录的 CarbonCopy 物品。",
+    [5] = "帳號 %s 的角色都沒有已記錄的 CarbonCopy 物品。",
+    [6] = "Ningún personaje de la cuenta %s tiene objetos de CarbonCopy registrados.",
+    [7] = "Ningún personaje de la cuenta %s tiene objetos de CarbonCopy registrados.",
+    [8] = "Ни у одного персонажа учётной записи %s нет записанных предметов CarbonCopy.",
+}
+
+-- %s = account name, %d = characters, %s = their names
+L.RESTORE_ACCOUNT_CHARACTERS = {
+    [0] = "Account %s: %d character(s) with logged items: %s",
+    [1] = "계정 %s: 기록된 아이템이 있는 캐릭터 %d명: %s",
+    [2] = "Compte %s : %d personnage(s) avec des objets enregistrés : %s",
+    [3] = "Account %s: %d Charakter(e) mit protokollierten Gegenständen: %s",
+    [4] = "账号 %s：%d 个角色有已记录的物品：%s",
+    [5] = "帳號 %s：%d 個角色有已記錄的物品：%s",
+    [6] = "Cuenta %s: %d personaje(s) con objetos registrados: %s",
+    [7] = "Cuenta %s: %d personaje(s) con objetos registrados: %s",
+    [8] = "Учётная запись %s: персонажей с записанными предметами: %d: %s",
+}
+
 L.RESTORE_LOG_DISABLED = {
     [0] = "The mailed-items log is disabled (Config.enableMailItemLog = false).",
     [1] = "우편 아이템 기록이 비활성화되어 있습니다 (Config.enableMailItemLog = false).",
@@ -1038,6 +1141,8 @@ L.SYNTAX_TICKETS_LOOKUP   = { [0] = "Syntax: .carboncopy tickets lookup $charact
 L.SYNTAX_TICKETS_ADD      = { [0] = "Syntax: .carboncopy tickets add $characterName $amount" }
 L.SYNTAX_TICKETS_REMOVE   = { [0] = "Syntax: .carboncopy tickets remove $characterName $amount" }
 L.SYNTAX_TICKETS_MOVE     = { [0] = "Syntax: .carboncopy tickets move $fromRealms $toRealms   (-1, 1, or several in quotes \"1 2 3\"; moves every balance)" }
+L.SYNTAX_TICKETS_MOVE_ACCOUNT = { [0] = "Syntax: .carboncopy tickets move --account $accountName $toRealms   (or --character $characterName; moves that account's balance from this realm, which keeps 0)" }
+L.SYNTAX_TARGET           = { [0] = "        $characterName can also be --character $characterName, or --account $accountName (restore / revoke: every character of the account)" }
 L.SYNTAX_LOGS             = { [0] = "Syntax: .carboncopy logs [--source name|guid] [--target name|guid] [--day YYYY-MM-DD] [--code N] [--limit N] [--oldest]" }
 L.SYNTAX_RESTORE_LIST     = { [0] = "Syntax: .carboncopy restore $characterName                                   (list mailed items and where they are now)" }
 L.SYNTAX_RESTORE_MISSING  = { [0] = "Syntax: .carboncopy restore $characterName missing [copyId] [--kick] [--clear]  (re-send only items that no longer exist)" }
