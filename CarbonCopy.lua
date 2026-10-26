@@ -20,6 +20,32 @@
 
 local CarbonCopyConfig = require("CarbonCopy_Config")
 local L = require("CarbonCopy_Locale")
+
+-- All texts live in CarbonCopy_Locale.lua.
+-- cc_tl(locale, key, ...) : text for a locale id (falls back to enUS [0]), string.format'ed with the values.
+-- cc_t(player, key, ...)  : same, for the player's client locale (player nil = console / log = enUS).
+local function cc_tl(locale, key, ...)
+    local entry = L[key]
+    local text = (type(entry) == "table" and (entry[locale or 0] or entry[0])) or entry or key
+    if select('#', ...) > 0 then
+        return string.format(text, ...)
+    end
+    return text
+end
+
+local function cc_t(player, key, ...)
+    return cc_tl(player and player:GetDbcLocale() or 0, key, ...)
+end
+local cc_info = cc_t
+
+-- "GM Name" or "The console", for the ticket messages
+local function cc_actor(player)
+    if player == nil then
+        return cc_t(nil, "ACTOR_CONSOLE")
+    end
+    return cc_t(player, "ACTOR_GM", player:GetName())
+end
+
 local Config = CarbonCopyConfig.Config
 local cc_maps = CarbonCopyConfig.cc_maps
 local ticket_Cost = CarbonCopyConfig.ticket_Cost
@@ -503,31 +529,6 @@ local function cc_execLogsCommand(chatHandler, commandArray, startIdx)
     chatHandler:SendSysMessage(cc_t(nil, "LOGS_RULE"))
     chatHandler:SendSysMessage(cc_t(nil, "LOGS_SUMMARY", count, limitN, cc_t(nil, orderOldest and "LOGS_OLDEST_FIRST" or "LOGS_NEWEST_FIRST")))
     chatHandler:SendSysMessage(cc_t(nil, "LOGS_END"))
-end
-
--- All texts live in CarbonCopy_Locale.lua.
--- cc_tl(locale, key, ...) : text for a locale id (falls back to enUS [0]), string.format'ed with the values.
--- cc_t(player, key, ...)  : same, for the player's client locale (player nil = console / log = enUS).
-local function cc_tl(locale, key, ...)
-    local entry = L[key]
-    local text = (type(entry) == "table" and (entry[locale or 0] or entry[0])) or entry or key
-    if select('#', ...) > 0 then
-        return string.format(text, ...)
-    end
-    return text
-end
-
-local function cc_t(player, key, ...)
-    return cc_tl(player and player:GetDbcLocale() or 0, key, ...)
-end
-local cc_info = cc_t
-
--- "GM Name" or "The console", for the ticket messages
-local function cc_actor(player)
-    if player == nil then
-        return cc_t(nil, "ACTOR_CONSOLE")
-    end
-    return cc_t(player, "ACTOR_GM", player:GetName())
 end
 
 -- Ticket cost to copy a character of this level, or nil if no ticket_Cost bracket covers it.
