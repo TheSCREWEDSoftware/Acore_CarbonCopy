@@ -50,29 +50,22 @@ local Config = CarbonCopyConfig.Config
 local cc_maps = CarbonCopyConfig.cc_maps
 local ticket_Cost = CarbonCopyConfig.ticket_Cost
 
--- Fallback / compatibility defaults for older configs.
+-- Settings (see CarbonCopy_Config.lua). Each fallback below is what CarbonCopy did before the option existed,
+-- so an older config file without these keys keeps the old behaviour.
 local cc_carboncopyTable = Config.carboncopyTableName or "carboncopy"
 local cc_playerLogsTable = Config.playerLogsTableName or "carboncopy_player_logs"
 local cc_adminLogsTable = Config.adminLogsTableName or "carboncopy_admin_logs"
+local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
 local cc_enablePlayerLogs = Config.enablePlayerLogs ~= false
 local cc_enableAdminLogs = Config.enableAdminLogs ~= false
-local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
 local cc_enableMailItemLog = Config.enableMailItemLog ~= false
-local cc_mailExpireDays = tonumber(Config.mailExpireDays) or 0
-local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
--- Mailed-items log rows older than this many days are deleted automatically (at startup and once a day). 0 = keep forever.
 local cc_mailLogRetentionDays = math.max(0, math.floor(tonumber(Config.mailItemLogRetentionDays) or 0))
+local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
 
-local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
--- 0 = empty slots / missing totems send nothing. An item entry (38 = Recruit's Shirt) = old behaviour, pad the mails with it.
-local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 0
--- Signs the copy / restore mails (the rest of the mail text is in CarbonCopy_Locale.lua)
-local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
--- true: copied / restored items get the soulbound flag added. false: they keep exactly the original item's flags.
 local cc_makeCopySoulbounded = Config.makeCopySoulbounded ~= false
-
--- Where the new character starts after a copy (Config.teleportToCapital). Defaults if the config doesn't set them.
-local cc_teleportToCapital = Config.teleportToCapital ~= false
+local cc_resetTalentsAfterCopy = Config.resetTalentsAfterCopy == true
+local cc_teleportToCapital = Config.teleportToCapital == true
+local cc_homebindToCapital = Config.homebindToCapital == true
 local cc_allianceRaces = Config.allianceRaces or { 1, 3, 4, 7, 11 }
 local cc_hordeRaces = Config.hordeRaces or { 2, 5, 6, 8, 10 }
 local cc_capitalPositions = Config.capitalPositions or {
@@ -80,13 +73,16 @@ local cc_capitalPositions = Config.capitalPositions or {
     horde    = { map = 1, zone = 1637, x = 1633.8,     y = -4440.47,  z = 15.634,    o = 3.08343 },  -- Orgrimmar, Valley of Strength
     neutral  = { map = 0, zone = 33,   x = -14468.104, y = 483.00665, z = 26.776731, o = 0.0 },      -- Booty Bay
 }
+local CC_CONTINENTS = { 0, 1, 530, 571 }   -- maps a Hearthstone bind point may be on
 
--- Hearthstone bind point of the new character: true = its capital (capitalPositions), false = the source character's.
--- Either way an invalid bind point (no row, not on a continent, all zero) falls back to capitalPositions.neutral.
-local cc_homebindToCapital = Config.homebindToCapital ~= false
--- Reset the new character's talents (both specs) when it first logs in.
-local cc_resetTalentsAfterCopy = Config.resetTalentsAfterCopy == true
-local CC_CONTINENTS = { 0, 1, 530, 571 }
+local cc_mailExpireDays = tonumber(Config.mailExpireDays) or -1
+local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
+local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 38
+-- Older configs have Config.mailText (the whole English gear mail text after "Hello Name") instead of mailSignature.
+-- When it's there and mailSignature isn't, the copy mails use it as before.
+local cc_legacyMailText = (Config.mailSignature == nil) and Config.mailText or nil
+
+local cc_doneMessageDelay = math.max(0, tonumber(Config.doneMessageDelay) or 5)
 
 -- Capital position for a race: alliance / horde list, anything else gets the neutral one.
 local function cc_capitalForRace(race)
@@ -107,13 +103,13 @@ local function cc_copyFlagsSql(sourceFlags)
     return '('..sourceFlags..')'
 end
 
--- Ban reasons used to lock a character during a copy / restore; only bans with these reasons are lifted by the script.
+-- Ban reasons used to lock a character during a copy / restore / revoke. The script only ever lifts bans with these reasons.
 local CC_BAN_REASON_COPY = "CarbonCopy"
 local CC_BAN_REASON_RESTORE = "CarbonCopy restore"
 local CC_BAN_REASON_REVOKE = "CarbonCopy revoke"
 
--- While a character is locked, check every Config.pollIntervalMs (up to Config.pollMaxAttempts times) whether it is
--- offline / its mail is saved, so the lock only lasts as long as the work really takes.
+-- While a character is locked, check every pollIntervalMs (up to pollMaxAttempts times) whether it is offline and
+-- its mail is saved, so the lock only lasts as long as the work really takes.
 local CC_POLL_MS = math.max(50, tonumber(Config.pollIntervalMs) or 250)
 local CC_POLL_MAX = math.max(1, tonumber(Config.pollMaxAttempts) or 60)
 
@@ -2127,7 +2123,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             if #totems > 0 then
                 cc_copyMailed = true
                 local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_TOTEMS_SUBJECT"),
-                    cc_tl(cc_copyLocale, "MAIL_TOTEMS_BODY", targetName, cc_mailSignature), totems)
+                    (cc_legacyMailText and ("Hello "..targetName..cc_legacyMailText) or cc_tl(cc_copyLocale, "MAIL_TOTEMS_BODY", targetName, cc_mailSignature)), totems)
                 for n = 1, #totems do
                     if guids[n] ~= nil then
                         table.insert(cc_totemMailGuids, guids[n])
@@ -2278,7 +2274,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         if #mailEntries > 0 then
             cc_copyMailed = true
             local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_GEAR_SUBJECT"),
-                cc_tl(cc_copyLocale, "MAIL_GEAR_BODY", targetName, cc_mailSignature), mailEntries)
+                (cc_legacyMailText and ("Hello "..targetName..cc_legacyMailText) or cc_tl(cc_copyLocale, "MAIL_GEAR_BODY", targetName, cc_mailSignature)), mailEntries)
             for n = 1, #mailEntries do
                 cc_newItemGuids[n] = guids[n]
             end
