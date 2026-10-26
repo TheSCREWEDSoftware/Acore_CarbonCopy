@@ -1412,7 +1412,14 @@ function cc_CopyCharacter(event, player, command, chatHandler)
     if cc_scriptIsBusy ~= 0 and cc_copyStartedAt ~= nil and os.time() - cc_copyStartedAt > 120 then
         cc_copyFailed("watchdog", "copy still not finished after 120 seconds")
     end
-    if cc_scriptIsBusy ~= 0 then
+    -- Only one copy can run at a time (it keeps its state in the shared cc_* variables). Everything else - ticket
+    -- commands, CCACCOUNTTICKETS from the website, restore, revoke, logs - works during a copy: ticket changes are
+    -- added on top of the stored balance in one statement, so they can't clash with the copy's own deduction.
+    local cc_subCommands = { help = true, ["--help"] = true, config = true, settings = true, tickets = true, logs = true,
+        restore = true, revoke = true, cleanup = true }
+    local isCopyRequest = commandArray[1] == "carboncopy" and player ~= nil and commandArray[2] ~= nil
+        and not cc_subCommands[string.lower(commandArray[2])]
+    if cc_scriptIsBusy ~= 0 and isCopyRequest then
         local reason = cc_t(nil, "ERR_SERVER_BUSY")
         chatHandler:SendSysMessage(cc_t(player, "ERR_SERVER_BUSY"))
         PrintInfo("CarbonCopy user request failed because the script has a scheduled task.")
