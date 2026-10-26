@@ -321,6 +321,31 @@ L.COPY_COMPLETE = {
     [8] = "Копирование завершено! Персонаж %s скопирован. Теперь можно выйти из игры.",
 }
 
+-- %d = tickets refunded
+L.COPY_FAILED_REFUNDED = {
+    [0] = "Something went wrong during the copy. Your %d ticket(s) have been refunded and you can try again.",
+    [1] = "복사 중 문제가 발생했습니다. 티켓 %d개가 환불되었으며 다시 시도할 수 있습니다.",
+    [2] = "Un problème est survenu pendant la copie. Vos %d ticket(s) ont été remboursés, vous pouvez réessayer.",
+    [3] = "Bei der Kopie ist etwas schiefgelaufen. Deine %d Ticket(s) wurden erstattet, du kannst es erneut versuchen.",
+    [4] = "复制过程中出现问题。已退还你的 %d 张票券，你可以再试一次。",
+    [5] = "複製過程中出現問題。已退還你的 %d 張票券，你可以再試一次。",
+    [6] = "Algo salió mal durante la copia. Se te han devuelto %d ticket(s) y puedes intentarlo de nuevo.",
+    [7] = "Algo salió mal durante la copia. Se te han devuelto %d ticket(s) y puedes intentarlo de nuevo.",
+    [8] = "Во время копирования произошла ошибка. Жетоны возвращены (%d), можно попробовать снова.",
+}
+
+L.COPY_FAILED_CONTACT_GM = {
+    [0] = "Something went wrong while finishing the copy. Your items were mailed; please contact a Game Master.",
+    [1] = "복사를 마무리하는 중 문제가 발생했습니다. 아이템은 우편으로 발송되었습니다. 게임 마스터에게 문의하세요.",
+    [2] = "Un problème est survenu à la fin de la copie. Vos objets ont été envoyés ; contactez un maître de jeu.",
+    [3] = "Beim Abschluss der Kopie ist etwas schiefgelaufen. Deine Gegenstände wurden verschickt; bitte wende dich an einen Spielleiter.",
+    [4] = "完成复制时出现问题。你的物品已邮寄，请联系游戏管理员。",
+    [5] = "完成複製時出現問題。你的物品已郵寄，請聯絡遊戲管理員。",
+    [6] = "Algo salió mal al terminar la copia. Tus objetos se han enviado; contacta con un Maestro de Juego.",
+    [7] = "Algo salió mal al terminar la copia. Tus objetos se han enviado; contacta a un Maestro de Juego.",
+    [8] = "При завершении копирования произошла ошибка. Предметы отправлены, обратитесь к гейм-мастеру.",
+}
+
 -- ---------------------------------------------------------------------------
 -- Mails. Copy mails use the copying player's locale, restore mails the target account's locale.
 -- Bodies: first %s = character name, second %s = Config.mailSignature

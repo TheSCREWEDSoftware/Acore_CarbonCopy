@@ -81,6 +81,10 @@ cc_totemItemGuids = {}      -- only the real totems, used for the mailed-items l
 cc_fixItemsAttempts = 0
 cc_restoreBusy = {}         -- target guid -> true while a restore for that character is being finalised
 cc_copyLocale = 0           -- locale of the copying player, used for the copy mails
+cc_copyAccountId = nil      -- account charged for the running copy
+cc_copyCharged = 0          -- tickets taken for the running copy (refunded if it fails before anything is mailed)
+cc_copyMailed = false       -- true once copy mails went out (no refund after that)
+cc_copyStartedAt = nil      -- os.time() the running copy started, for the watchdog
 
 -- If module runs for the first time, create the db specified in Config.dbName and add the "carboncopy" table to it.
 CharDBQuery('CREATE DATABASE IF NOT EXISTS `'..Config.customDbName..'`;');
@@ -968,6 +972,28 @@ local function cc_execRestoreCommand(player, say, commandArray, startIdx, admin,
     CreateLuaEvent(function() cc_finishRestore(job) end, CC_POLL_MS, 1)
 end
 
+-- Pet numbers for copied hunter pets. The core hands out pet numbers from its own counter (MAX(id) at startup, then +1
+-- per new pet), so MAX(id)+1 from Lua can be handed out again by the core before the next restart. Copied pets instead
+-- count DOWN from CC_PET_ID_CEILING: the core's counter is far below that until a restart, and after a restart it starts
+-- above the ceiling (MAX(id)+1), so the two can never meet. Stays below 2^31.
+local CC_PET_ID_CEILING = 1073741824
+local CC_PET_ID_RANGE = 100000000
+
+local function cc_newPetId()
+    local id = CC_PET_ID_CEILING
+    local q = CharDBQuery('SELECT MIN(`id`) FROM `character_pet` WHERE `id` > '..(CC_PET_ID_CEILING - CC_PET_ID_RANGE)
+        ..' AND `id` <= '..CC_PET_ID_CEILING..';')
+    if q ~= nil and not q:IsNull(0) then
+        id = q:GetUInt32(0) - 1
+    end
+    -- skip numbers that still have leftover rows
+    while CharDBQuery('SELECT 1 FROM `character_pet` WHERE `id` = '..id..' LIMIT 1;') ~= nil
+        or CharDBQuery('SELECT 1 FROM `pet_spell` WHERE `guid` = '..id..' LIMIT 1;') ~= nil do
+        id = id - 1
+    end
+    return id
+end
+
 function cc_CopyCharacter(event, player, command, chatHandler)
 
     local commandArray = cc_splitString(command)
@@ -990,6 +1016,9 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         return
     end
 
+    if cc_scriptIsBusy ~= 0 and cc_copyStartedAt ~= nil and os.time() - cc_copyStartedAt > 120 then
+        cc_copyFailed("watchdog", "copy still not finished after 120 seconds")
+    end
     if cc_scriptIsBusy ~= 0 then
         local reason = cc_t(nil, "ERR_SERVER_BUSY")
         chatHandler:SendSysMessage(cc_t(player, "ERR_SERVER_BUSY"))
@@ -1534,12 +1563,17 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
             requiredTickets = 1
         elseif Config.ticketCost == "level" then
-            local Data_SQL = CharDBQuery('SELECT `level` FROM `characters` WHERE `guid` = '..cc_playerGUID..' LIMIT 1;');
-            local n = Data_SQL:GetUInt8(0) - 1
-            repeat
-                n = n + 1
-            until ticket_Cost[n] ~= nil
-            requiredTickets = ticket_Cost[n]
+            -- cost of the first ticket_Cost bracket at or above the level; nil if no bracket covers it
+            -- (the old loop here never ended in that case and froze the server)
+            requiredTickets = cc_ticketCostForLevel(player:GetLevel())
+            if requiredTickets == nil then
+                local reason = cc_t(nil, "ERR_COPY_LEVEL_TOO_HIGH", Config.maxLevel)
+                chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_LEVEL_TOO_HIGH", Config.maxLevel))
+                cc_logPlayer(sourceName, sourceGuid, targetName, newCharacter, player:GetLevel(), availableTickets, availableTickets, CC_STATUS_FAILED, reason.." (no ticket_Cost bracket for this level)")
+                PrintError("CarbonCopy: no ticket_Cost bracket covers level "..player:GetLevel()..". Add one in CarbonCopy_Config.lua.")
+                cc_resetVariables()
+                return false
+            end
             if availableTickets ~= nil and availableTickets <= 0 then
                 local reason = cc_t(nil, "ERR_COPY_NOT_ENOUGH_TICKETS")
                 chatHandler:SendSysMessage(cc_t(player, "ERR_COPY_NOT_ENOUGH_TICKETS"))
@@ -1554,9 +1588,11 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 cc_resetVariables()
                 return false
             end
-            Data_SQL = nil
         else
             PrintError("Unhandled exception in CarbonCopy. Config.ticketCost is neither set to \"single\" nor \"level\".")
+            chatHandler:SendSysMessage(cc_t(player, "ERR_SERVER_BUSY"))
+            cc_resetVariables()
+            return false
         end
 
         --check for target character to be same class/race
@@ -1660,18 +1696,23 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         -- mails for the new character use the copying player's locale (same account, same client)
         cc_copyLocale = locale
 
-        cc_eventId = CreateLuaEvent(cc_resumeSubRoutine, 1000, 11)
+        -- what a failed copy needs to refund and unlock (see cc_copyFailed)
+        cc_copyAccountId = accountId
+        cc_copyCharged = 0
+        cc_copyMailed = false
+        cc_copyStartedAt = os.time()
+
+        -- resumes the copy once a second until it is finished (cc_resumeSubRoutine removes the event)
+        cc_eventId = CreateLuaEvent(cc_resumeSubRoutine, 1000, 0)
 
         cc_subRoutine = coroutine.create(function ()
 
         -- deduct tickets
         if Config.ticketCost == "single" then
-            local Data_SQL = CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets -1 WHERE `account_id` = '..accountId..';');
-            Data_SQL = nil
-        elseif Config.ticketCost == "level" then
-            local Data_SQL = CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets -'..requiredTickets..' WHERE `account_id` = '..accountId..';');
-            Data_SQL = nil
+            requiredTickets = 1
         end
+        CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets -'..requiredTickets..' WHERE `account_id` = '..accountId..';');
+        cc_copyCharged = requiredTickets
 
         -- delete TempTables
         cc_deleteTempTables(cc_playerGUID)
@@ -1716,9 +1757,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 cc_playerPetId = Data_SQL:GetUInt32(0)
                 Data_SQL = nil
 
-                local Data_SQL = CharDBQuery('SELECT MAX(id) FROM character_pet;');
-                local cc_targetPetId = Data_SQL:GetUInt32(0) + 1
-                Data_SQL = nil
+                local cc_targetPetId = cc_newPetId()
 
                 local Data_SQL = CharDBQuery('DELETE FROM character_pet WHERE owner = '..cc_newCharacter..';')
                 local Data_SQL = CharDBQuery('CREATE TEMPORARY TABLE tempPet'..cc_playerGUID..' LIKE character_pet;')
@@ -1757,6 +1796,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             cc_totemMailGuids = {}
             cc_totemItemGuids = {}
             if #totems > 0 then
+                cc_copyMailed = true
                 local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_TOTEMS_SUBJECT"),
                     cc_tl(cc_copyLocale, "MAIL_TOTEMS_BODY", targetName, cc_mailSignature), totems)
                 for n = 1, #totems do
@@ -1843,11 +1883,16 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         coroutine.yield()
         --Copy items
         if not Config.keepStartingItems then
-            local homeStone
-            local Data_SQL = CharDBQuery('DELETE FROM item_instance WHERE owner_guid = '..cc_newCharacter..' AND itemEntry != 6948;')
-            local Data_SQL = CharDBQuery('SELECT guid FROM item_instance WHERE owner_guid = '..cc_newCharacter..' AND itemEntry = 6948 LIMIT 1;')
-            homeStone = Data_SQL:GetUInt32(0)
-            local Data_SQL = CharDBQuery('DELETE FROM character_inventory WHERE guid = '..cc_newCharacter..' AND item != '..homeStone..';')
+            -- delete everything the new character has except one Hearthstone (if it has one at all)
+            local hearthstone = CharDBQuery('SELECT guid FROM item_instance WHERE owner_guid = '..cc_newCharacter..' AND itemEntry = 6948 LIMIT 1;')
+            if hearthstone ~= nil then
+                local homeStone = hearthstone:GetUInt32(0)
+                CharDBQuery('DELETE FROM item_instance WHERE owner_guid = '..cc_newCharacter..' AND guid != '..homeStone..';')
+                CharDBQuery('DELETE FROM character_inventory WHERE guid = '..cc_newCharacter..' AND item != '..homeStone..';')
+            else
+                CharDBQuery('DELETE FROM item_instance WHERE owner_guid = '..cc_newCharacter..';')
+                CharDBQuery('DELETE FROM character_inventory WHERE guid = '..cc_newCharacter..';')
+            end
         end
         Data_SQL = nil
 
@@ -1881,6 +1926,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
             end
         end
         if #mailEntries > 0 then
+            cc_copyMailed = true
             local guids = cc_sendItemMails(cc_newCharacter, cc_tl(cc_copyLocale, "MAIL_GEAR_SUBJECT"),
                 cc_tl(cc_copyLocale, "MAIL_GEAR_BODY", targetName, cc_mailSignature), mailEntries)
             for n = 1, #mailEntries do
@@ -2059,7 +2105,77 @@ function cc_CopyCharacter(event, player, command, chatHandler)
     end
 end
 
+-- A copy step failed with a Lua/DB error. Refunds the tickets when nothing has been mailed yet (and lets the player
+-- try again, the copy overwrites everything it touches), unlocks the new character, releases the lock, tells the player.
+function cc_copyFailed(stage, err)
+    -- refund / unlock / log / tell the player; protected so the lock below is released even if this part fails
+    local cleanupOk, cleanupErr = pcall(function()
+        PrintError("CarbonCopy: copy to character "..tostring(cc_newCharacter).." failed during "..stage..": "..tostring(err))
+        local refunded = 0
+        if cc_copyAccountId ~= nil and (cc_copyCharged or 0) > 0 and not cc_copyMailed then
+            CharDBQuery('UPDATE `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` SET tickets = tickets + '..cc_copyCharged
+                ..' WHERE `account_id` = '..cc_copyAccountId..';')
+            refunded = cc_copyCharged
+            if cc_newCharacter ~= nil and cc_newCharacter ~= 0 then
+                CharDBQuery('UPDATE `characters` SET `cinematic` = 0 WHERE `guid` = '..cc_newCharacter..';')
+            end
+        end
+        if cc_newCharacter ~= nil and cc_newCharacter ~= 0 then
+            cc_liftCarbonCopyBan(cc_newCharacter)
+        end
+        if cc_playerGUID ~= nil then
+            cc_deleteTempTables(cc_playerGUID)
+        end
+
+        cc_logPlayer(cc_copySourceName or cc_characterNameByGuid(cc_playerGUID), cc_playerGUID, cc_newCharacterName,
+            (cc_newCharacter ~= 0) and cc_newCharacter or nil, cc_copySourceLevel,
+            cc_copyTicketsBefore, refunded > 0 and cc_copyTicketsBefore or cc_copyTicketsAfter, CC_STATUS_FAILED,
+            "Copy failed during "..stage..(refunded > 0 and ", "..refunded.." ticket(s) refunded" or ", items already mailed, no refund")
+            ..": "..string.sub(tostring(err), 1, 150))
+
+        local copyingPlayer = cc_playerGUID ~= nil and GetPlayerByGUID(cc_playerGUID) or nil
+        if copyingPlayer ~= nil then
+            if refunded > 0 then
+                copyingPlayer:SendBroadcastMessage(cc_t(copyingPlayer, "COPY_FAILED_REFUNDED", refunded))
+            else
+                copyingPlayer:SendBroadcastMessage(cc_t(copyingPlayer, "COPY_FAILED_CONTACT_GM"))
+            end
+        end
+
+    end)
+    if not cleanupOk then
+        PrintError("CarbonCopy: cleanup after the failed copy also failed: "..tostring(cleanupErr))
+    end
+
+    cc_subRoutine = nil
+    cc_newCharacter = 0
+    cc_newCharacterName = nil
+    cc_copyTicketsBefore = nil
+    cc_copyTicketsAfter = nil
+    cc_copySourceName = nil
+    cc_copySourceLevel = nil
+    cc_copyAccountId = nil
+    cc_copyCharged = 0
+    cc_copyMailed = false
+    cc_copyStartedAt = nil
+    cc_oldItemGuids = {}
+    cc_newItemGuids = {}
+    cc_totemMailGuids = {}
+    cc_totemItemGuids = {}
+    cc_fixItemsAttempts = 0
+    cc_scriptIsBusy = 0
+    cc_playerGUID = nil
+end
+
+-- Finishes the copy (enchants, mail expiry, logs, unlock); any error goes to cc_copyFailed instead of leaving the lock on.
 function cc_fixItems()
+    local ok, err = pcall(cc_fixItemsStep)
+    if not ok then
+        cc_copyFailed("item fix", err)
+    end
+end
+
+function cc_fixItemsStep()
     local n
     local Data_SQL
 
@@ -2159,6 +2275,10 @@ function cc_fixItems()
     PrintInfo("2) Item enchants/gems copied for new character with GUID "..cc_newCharacter);
     cc_copySourceName = nil
     cc_copySourceLevel = nil
+    cc_copyAccountId = nil
+    cc_copyCharged = 0
+    cc_copyMailed = false
+    cc_copyStartedAt = nil
     cc_newCharacter = 0
     cc_newCharacterName = nil
     cc_copyTicketsBefore = nil
@@ -2229,32 +2349,29 @@ function cc_has_value (tab, val)
 end
 
 function cc_resumeSubRoutine(eventId, delay, repeats)
-    coroutine.resume(cc_subRoutine)
+    if cc_subRoutine == nil then
+        RemoveEventById(eventId)
+        return
+    end
+    local ok, err = coroutine.resume(cc_subRoutine)
+    if not ok then
+        RemoveEventById(eventId)
+        cc_subRoutine = nil
+        cc_copyFailed("copy", err)
+    elseif coroutine.status(cc_subRoutine) == "dead" then
+        RemoveEventById(eventId)
+        cc_subRoutine = nil
+    end
 end
 
 local PLAYER_EVENT_ON_COMMAND = 42
 local PLAYER_EVENT_ON_LOGOUT = 4
 
--- If the player who initiated a copy disconnects mid-copy, release the busy lock.
--- The coroutine will still finish its DB work, but the lock would never reset otherwise.
+-- The copy runs on a timer, not on the player, so it finishes even if the source player logs out.
+-- The lock is only released when it is done (or by cc_copyFailed), so a second copy can't start in between.
 local function cc_OnPlayerLogout(event, player)
-    if cc_scriptIsBusy ~= 0 and cc_playerGUID ~= nil then
-        local guid = tonumber(tostring(player:GetGUID()))
-        if guid == cc_playerGUID then
-            PrintInfo("CarbonCopy: Source player disconnected mid-copy (GUID "..cc_playerGUID.."). Releasing busy lock.")
-            cc_logPlayer(
-                player:GetName(), guid,
-                cc_newCharacterName, cc_newCharacter ~= 0 and cc_newCharacter or nil,
-                player:GetLevel(),
-                cc_copyTicketsBefore, cc_copyTicketsAfter,
-                CC_STATUS_FAILED, "Source player disconnected mid-copy"
-            )
-            cc_scriptIsBusy = 0
-            cc_playerGUID = nil
-            cc_newCharacterName = nil
-            cc_copyTicketsBefore = nil
-            cc_copyTicketsAfter = nil
-        end
+    if cc_scriptIsBusy ~= 0 and cc_playerGUID ~= nil and tonumber(tostring(player:GetGUID())) == cc_playerGUID then
+        PrintInfo("CarbonCopy: source player (GUID "..cc_playerGUID..") logged out mid-copy. The copy continues.")
     end
 end
 
