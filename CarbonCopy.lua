@@ -2053,7 +2053,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         Data_SQL = nil
 
         coroutine.yield()
-        -- Hearthstone bind point: the capital (Config.homebindToCapital) or the source's, Booty Bay if that isn't valid
+        -- Hearthstone bind point: the capital (Config.homebindToCapital) or the source's; if that isn't valid, the capital
         local bind
         if cc_homebindToCapital then
             bind = cc_capitalForRace(sourceRace)
@@ -2063,11 +2063,20 @@ function cc_CopyCharacter(event, player, command, chatHandler)
                 bind = { map = hb:GetUInt16(0), zone = hb:GetUInt16(1), x = hb:GetFloat(2), y = hb:GetFloat(3), z = hb:GetFloat(4) }
             end
         end
-        local bindValid = bind ~= nil and cc_has_value(CC_CONTINENTS, tonumber(bind.map)) and (tonumber(bind.zone) or 0) ~= 0
-            and not (tonumber(bind.x) == 0 and tonumber(bind.y) == 0 and tonumber(bind.z) == 0)
-        if not bindValid then
-            PrintInfo("CarbonCopy: no valid bind point for character "..cc_newCharacter..", using the neutral one (capitalPositions.neutral).")
-            bind = cc_capitalPositions.neutral
+        -- a valid bind point: on a continent, has a zone, not all zero
+        local function bindValid(b)
+            return b ~= nil and cc_has_value(CC_CONTINENTS, tonumber(b.map)) and (tonumber(b.zone) or 0) ~= 0
+                and not (tonumber(b.x) == 0 and tonumber(b.y) == 0 and tonumber(b.z) == 0)
+        end
+        if not bindValid(bind) then
+            -- invalid: the faction's capital (races in neither list already get the neutral position there),
+            -- and the neutral position if even that isn't valid
+            bind = cc_capitalForRace(sourceRace)
+            if not bindValid(bind) then
+                bind = cc_capitalPositions.neutral
+            end
+            PrintInfo("CarbonCopy: the bind point for character "..cc_newCharacter.." wasn't valid, using map "..tostring(bind.map)
+                ..", zone "..tostring(bind.zone)..".")
         end
         CharDBQuery('DELETE FROM character_homebind WHERE guid = '..cc_newCharacter..';')
         CharDBQuery('INSERT INTO character_homebind (guid, mapId, zoneId, posX, posY, posZ) VALUES ('..cc_newCharacter..', '

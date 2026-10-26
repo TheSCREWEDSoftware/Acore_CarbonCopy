@@ -95,7 +95,7 @@ Config.resetTalentsAfterCopy = false
 Config.teleportToCapital = false
 
 -- Hearthstone bind point: true = its faction's capital (capitalPositions), false = copied from the source character.
--- An invalid bind point (none, not on a continent, all zero) is always replaced with the neutral position.
+-- If the copied bind point isn't valid (none, not on a continent, all zero) the faction's capital is used instead.
 Config.homebindToCapital = false
 
 -- Which races use which capital. Races in neither list (e.g. custom races) use the neutral position.
