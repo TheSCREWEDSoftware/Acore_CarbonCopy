@@ -55,6 +55,13 @@ local cc_capitalPositions = Config.capitalPositions or {
     neutral  = { map = 0, zone = 33,   x = -14468.104, y = 483.00665, z = 26.776731, o = 0.0 },      -- Booty Bay
 }
 
+-- Hearthstone bind point of the new character: true = its capital (capitalPositions), false = the source character's.
+-- Either way an invalid bind point (no row, not on a continent, all zero) falls back to capitalPositions.neutral.
+local cc_homebindToCapital = Config.homebindToCapital ~= false
+-- Reset the new character's talents (both specs) when it first logs in.
+local cc_resetTalentsAfterCopy = Config.resetTalentsAfterCopy == true
+local CC_CONTINENTS = { 0, 1, 530, 571 }
+
 -- Capital position for a race: alliance / horde list, anything else gets the neutral one.
 local function cc_capitalForRace(race)
     for _, r in ipairs(cc_allianceRaces) do
@@ -2021,6 +2028,7 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         QueryString = QueryString..'t1.leveltime = t2.leveltime, t1.stable_slots = t2.stable_slots, t1.health = t2.health, '
         QueryString = QueryString..'t1.power1 = t2.power1, t1.power2 = t2.power2, t1.power3 = t2.power3, t1.power4 = t2.power4, '
         QueryString = QueryString..'t1.power5 = t2.power5, t1.power6 = t2.power6, t1.power7 = t2.power7, t1.talentGroupsCount = t2.talentGroupsCount, '
+        QueryString = QueryString..'t1.activeTalentGroup = t2.activeTalentGroup, '
         QueryString = QueryString..'t1.exploredZones = t2.exploredZones WHERE t1.guid = '..cc_newCharacter..';'
         local Data_SQL = CharDBQuery(QueryString);
         QueryString = nil
@@ -2048,19 +2056,31 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         Data_SQL = nil
 
         coroutine.yield()
-        -- Copy character_homebind
-        local Data_SQL = CharDBQuery('DELETE FROM character_homebind WHERE guid = '..cc_newCharacter..';')
-        local Data_SQL = CharDBQuery('INSERT INTO character_homebind VALUES ('..cc_newCharacter..' ,0,0,0,0,0);')
-        QueryString = 'UPDATE character_homebind AS t1 INNER JOIN character_homebind AS t2 ON t2.guid = '..cc_playerGUID..' '
-        QueryString = QueryString..'SET t1.mapId = t2.mapId, t1.zoneId = t2.zoneId, t1.posX = t2.posX, t1.posY = t2.posY, t1.posZ = t2.posZ '
-        QueryString = QueryString..'WHERE t1.guid = '..cc_newCharacter..';'
-        local Data_SQL = CharDBQuery(QueryString);
-        QueryString = nil
-        Data_SQL = nil
+        -- Hearthstone bind point: the capital (Config.homebindToCapital) or the source's, Booty Bay if that isn't valid
+        local bind
+        if cc_homebindToCapital then
+            bind = cc_capitalForRace(sourceRace)
+        else
+            local hb = CharDBQuery('SELECT mapId, zoneId, posX, posY, posZ FROM character_homebind WHERE guid = '..cc_playerGUID..' LIMIT 1;')
+            if hb ~= nil then
+                bind = { map = hb:GetUInt16(0), zone = hb:GetUInt16(1), x = hb:GetFloat(2), y = hb:GetFloat(3), z = hb:GetFloat(4) }
+            end
+        end
+        local bindValid = bind ~= nil and cc_has_value(CC_CONTINENTS, tonumber(bind.map)) and (tonumber(bind.zone) or 0) ~= 0
+            and not (tonumber(bind.x) == 0 and tonumber(bind.y) == 0 and tonumber(bind.z) == 0)
+        if not bindValid then
+            PrintInfo("CarbonCopy: no valid bind point for character "..cc_newCharacter..", using the neutral one (capitalPositions.neutral).")
+            bind = cc_capitalPositions.neutral
+        end
+        CharDBQuery('DELETE FROM character_homebind WHERE guid = '..cc_newCharacter..';')
+        CharDBQuery('INSERT INTO character_homebind (guid, mapId, zoneId, posX, posY, posZ) VALUES ('..cc_newCharacter..', '
+            ..tonumber(bind.map)..', '..tonumber(bind.zone)..', '..tonumber(bind.x)..', '..tonumber(bind.y)..', '..tonumber(bind.z)..');')
 
         -- Copy character_pet and totems
         if cc_playerString == "Hunter" then
-            local Data_SQL = CharDBQuery('SELECT id FROM character_pet WHERE owner = '..cc_playerGUID..' LIMIT 1;');
+            -- the active pet first (slot 0), then a dismissed one (100), then the stabled ones; oldest first within each
+            local Data_SQL = CharDBQuery('SELECT id FROM character_pet WHERE owner = '..cc_playerGUID
+                ..' ORDER BY CASE WHEN slot = 0 THEN 0 WHEN slot = 100 THEN 1 ELSE 2 END, id LIMIT 1;');
             if Data_SQL ~= nil then
                 cc_playerPetId = Data_SQL:GetUInt32(0)
                 Data_SQL = nil
@@ -2167,6 +2187,23 @@ function cc_CopyCharacter(event, player, command, chatHandler)
         local Data_SQL = CharDBQuery('INSERT INTO character_talent SELECT * FROM tempTalent'..cc_playerGUID..';')
         local Data_SQL = CharDBQuery('DROP TABLE IF EXISTS tempTalent'..cc_playerGUID..';')
         Data_SQL = nil
+
+        -- Config.resetTalentsAfterCopy: the core resets the active spec at first login (AT_LOGIN_RESET_TALENTS, it
+        -- also removes the talent spells properly). The other spec is cleared here: its talents and the spells only
+        -- it had are dropped, and talents/spells shared by both specs are left to the active spec only.
+        if cc_resetTalentsAfterCopy then
+            local sg = CharDBQuery('SELECT activeTalentGroup FROM characters WHERE guid = '..cc_newCharacter..' LIMIT 1;')
+            local activeMask = 1
+            if sg ~= nil then
+                activeMask = (sg:GetUInt8(0) == 1) and 2 or 1   -- spec 1 = mask 1, spec 2 = mask 2
+            end
+            CharDBQuery('DELETE FROM character_talent WHERE guid = '..cc_newCharacter..' AND (specMask & '..activeMask..') = 0;')
+            CharDBQuery('UPDATE character_talent SET specMask = (specMask & '..activeMask..') WHERE guid = '..cc_newCharacter..';')
+            CharDBQuery('DELETE FROM character_spell WHERE guid = '..cc_newCharacter..' AND specMask <> 255 AND (specMask & '..activeMask..') = 0;')
+            CharDBQuery('UPDATE character_spell SET specMask = (specMask & '..activeMask..') WHERE guid = '..cc_newCharacter
+                ..' AND specMask <> 255 AND specMask <> '..activeMask..';')
+            CharDBQuery('UPDATE characters SET at_login = (at_login | 4) WHERE guid = '..cc_newCharacter..';')
+        end
 
         coroutine.yield()
         --Copy glyphs

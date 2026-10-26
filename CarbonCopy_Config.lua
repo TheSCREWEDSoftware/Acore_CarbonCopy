@@ -74,7 +74,15 @@ Config.makeCopySoulbounded = true
 -- Put the new character in its faction's capital after the copy (true = yes | false = no, it stays where it was created).
 Config.teleportToCapital = true
 
--- Which races go to which capital. Races in neither list (e.g. custom races) go to the neutral position.
+-- Hearthstone bind point of the new character: true = its capital (capitalPositions below), false = the source character's.
+-- If the bind point isn't valid (none, not on a continent, all zero) it is set to the neutral position (Booty Bay).
+Config.homebindToCapital = true
+
+-- Reset the new character's talents (both specs) when it first logs in, so the player spends them again (true = yes | false = no).
+-- Glyphs are kept.
+Config.resetTalentsAfterCopy = false
+
+-- Which races go to which capital (teleport and Hearthstone). Races in neither list (e.g. custom races) go to the neutral position.
 Config.allianceRaces = { 1, 3, 4, 7, 11 }   -- Human, Dwarf, Night Elf, Gnome, Draenei
 Config.hordeRaces    = { 2, 5, 6, 8, 10 }   -- Orc, Undead, Tauren, Troll, Blood Elf
 
