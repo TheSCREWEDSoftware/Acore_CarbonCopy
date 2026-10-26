@@ -81,8 +81,7 @@ local function cc_parseTicketRealms(value)
 end
 local CC_TICKET_REALMS, cc_realmsError = cc_parseTicketRealms(Config.ticketRealms or Config.ticketRealm)
 if CC_TICKET_REALMS == nil then
-    PrintError("CarbonCopy: Config.ticketRealms is invalid ("..cc_realmsError.."), using -1 (all realms).")
-    CC_TICKET_REALMS = "-1"
+    CC_TICKET_REALMS = "-1"   -- only so the rest of this file can load; the config check below stops CarbonCopy
 end
 -- only digits, spaces and "-1" left after parsing, so it can go into SQL as a quoted literal
 local CC_TICKET_REALMS_SQL = "'"..CC_TICKET_REALMS.."'"
@@ -175,6 +174,101 @@ cc_copyMailed = false       -- true once copy mails went out (no refund after th
 cc_copyStartedAt = nil      -- os.time() the running copy started, for the watchdog
 
 -- If module runs for the first time, create the db specified in Config.dbName and add the "carboncopy" table to it.
+----------------------------------------------------------------------------------------------------
+-- Config check: CarbonCopy refuses to load with settings it can't work with, and lists every problem at once.
+-- (A Lua error while loading stops this file, so no command or event below gets registered.)
+----------------------------------------------------------------------------------------------------
+do
+    local problems = {}
+    local function bad(text)
+        table.insert(problems, text)
+    end
+    local function show(value)
+        if type(value) == "string" then return '"'..value..'"' end
+        return tostring(value)
+    end
+    local function isWhole(value, min, max)
+        return type(value) == "number" and value == math.floor(value) and value >= (min or -math.huge) and value <= (max or math.huge)
+    end
+    local function isName(value)
+        return type(value) == "string" and value:match("^[%w_]+$") ~= nil
+    end
+
+    if not isName(Config.customDbName) then
+        bad("Config.customDbName must be a database name (letters, digits, _), is "..show(Config.customDbName))
+    end
+    for _, key in ipairs({ "carboncopyTableName", "playerLogsTableName", "adminLogsTableName", "mailItemsTableName" }) do
+        if Config[key] ~= nil and not isName(Config[key]) then
+            bad("Config."..key.." must be a table name (letters, digits, _), is "..show(Config[key]))
+        end
+    end
+    if not isWhole(Config.freeTickets, 0) then
+        bad("Config.freeTickets must be a whole number of 0 or more, is "..show(Config.freeTickets))
+    end
+    if not isWhole(Config.maxLevel, 1, 255) then
+        bad("Config.maxLevel must be a level from 1 to 255, is "..show(Config.maxLevel))
+    end
+    if not isWhole(Config.minGMRankForCopy, 0) then
+        bad("Config.minGMRankForCopy must be a whole number of 0 or more, is "..show(Config.minGMRankForCopy))
+    end
+    if not isWhole(Config.minGMRankForTickets, 0) then
+        bad("Config.minGMRankForTickets must be a whole number of 0 or more, is "..show(Config.minGMRankForTickets))
+    end
+    if Config.ticketCost ~= "single" and Config.ticketCost ~= "level" then
+        bad('Config.ticketCost must be "single" or "level", is '..show(Config.ticketCost))
+    elseif Config.ticketCost == "level" then
+        local highest = nil
+        for level, cost in pairs(ticket_Cost or {}) do
+            if not isWhole(level, 1) or not isWhole(cost, 0) then
+                bad("ticket_Cost["..show(level).."] = "..show(cost).." must be a level from 1 up with a whole cost of 0 or more")
+            elseif highest == nil or level > highest then
+                highest = level
+            end
+        end
+        if highest == nil then
+            bad('ticket_Cost has no entries, but Config.ticketCost is "level"')
+        elseif isWhole(Config.maxLevel, 1) and highest < Config.maxLevel then
+            bad("ticket_Cost must cover every level up to Config.maxLevel ("..Config.maxLevel.."), its highest entry is "..highest)
+        end
+    end
+    local mapCount = 0
+    for _, map in pairs(cc_maps or {}) do
+        mapCount = mapCount + 1
+        if not isWhole(map, 0) then
+            bad("cc_maps entries must be map ids, one is "..show(map))
+        end
+    end
+    if mapCount == 0 then
+        bad("cc_maps is empty, nobody could copy anywhere")
+    end
+    if cc_realmsError ~= nil then
+        bad("Config.ticketRealms is invalid ("..cc_realmsError.."), is "..show(Config.ticketRealms or Config.ticketRealm))
+    end
+    if not isWhole(cc_emptySlotFiller, 0) then
+        bad("Config.emptySlotFiller must be 0 or an item id, is "..show(Config.emptySlotFiller))
+    elseif cc_emptySlotFiller > 0 and WorldDBQuery('SELECT 1 FROM `item_template` WHERE `entry` = '..cc_emptySlotFiller..' LIMIT 1;') == nil then
+        bad("Config.emptySlotFiller is item "..cc_emptySlotFiller..", which doesn't exist in item_template")
+    end
+    if Config.capitalPositions ~= nil then
+        for _, side in ipairs({ "alliance", "horde", "neutral" }) do
+            local pos = type(Config.capitalPositions) == "table" and Config.capitalPositions[side] or nil
+            if type(pos) ~= "table" then
+                bad("Config.capitalPositions."..side.." is missing")
+            else
+                for _, field in ipairs({ "map", "zone", "x", "y", "z" }) do
+                    if type(pos[field]) ~= "number" then
+                        bad("Config.capitalPositions."..side.."."..field.." must be a number, is "..show(pos[field]))
+                    end
+                end
+            end
+        end
+    end
+
+    if #problems > 0 then
+        error("CarbonCopy NOT loaded, fix CarbonCopy_Config.lua and reload ALE:\n  - "..table.concat(problems, "\n  - "), 0)
+    end
+end
+
 CharDBQuery('CREATE DATABASE IF NOT EXISTS `'..Config.customDbName..'`;');
 CharDBQuery('CREATE TABLE IF NOT EXISTS `'..Config.customDbName..'`.`'..cc_carboncopyTable..'` ('
     ..'`account_id` INT(11) NOT NULL, '
