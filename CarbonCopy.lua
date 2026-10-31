@@ -110,7 +110,6 @@ local cc_mailItemsTable = Config.mailItemsTableName or "carboncopy_mail_items"
 local cc_enablePlayerLogs = Config.enablePlayerLogs ~= false
 local cc_enableAdminLogs = Config.enableAdminLogs ~= false
 local cc_enableMailItemLog = Config.enableMailItemLog ~= false
-local cc_mailLogRetentionDays = math.max(0, math.floor(tonumber(Config.mailItemLogRetentionDays) or 0))
 local cc_minGMRankForRestore = tonumber(Config.minGMRankForRestore) or tonumber(Config.minGMRankForTickets) or 2
 
 local cc_makeCopySoulbounded = Config.makeCopySoulbounded ~= false
@@ -127,8 +126,20 @@ local cc_capitalPositions = Config.capitalPositions or {
 local CC_CONTINENTS = { 0, 1, 530, 571 }   -- maps a Hearthstone bind point may be on
 
 local cc_mailExpireDays = tonumber(Config.mailExpireDays) or -1
+-- days the core keeps mail when CarbonCopy doesn't set an expiry (Config.mailExpireDays = -1)
+local CC_CORE_MAIL_EXPIRE_DAYS = 30
+-- Config.mailItemLogRetentionDays: -1 = as long as the mails stay, 0 = never, N = N days
+local cc_mailLogRetentionSetting = math.floor(tonumber(Config.mailItemLogRetentionDays) or -1)
+local cc_mailLogRetentionDays = cc_mailLogRetentionSetting
+if cc_mailLogRetentionSetting < 0 then
+    if cc_mailExpireDays < 0 then
+        cc_mailLogRetentionDays = CC_CORE_MAIL_EXPIRE_DAYS
+    else
+        cc_mailLogRetentionDays = math.floor(cc_mailExpireDays)   -- 0 = mails never expire: keep the log too
+    end
+end
 local cc_mailSignature = Config.mailSignature or "the team of ChromieCraft!"
-local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 38
+local cc_emptySlotFiller = tonumber(Config.emptySlotFiller) or 0
 -- Older configs have Config.mailText (the whole English gear mail text after "Hello Name") instead of mailSignature.
 -- When it's there and mailSignature isn't, the copy mails use it as before.
 local cc_legacyMailText = (Config.mailSignature == nil) and Config.mailText or nil
@@ -274,6 +285,13 @@ do
     elseif CC_TICKET_REALMS ~= "-1" and not (" "..CC_TICKET_REALMS.." "):find(" "..CC_REALM_ID.." ", 1, true) then
         bad("Config.ticketRealms must include this realm (id "..CC_REALM_ID.." from the core) or be \"-1\", is "
             ..show(Config.ticketRealms or Config.ticketRealm).." - new balances would not be visible on this realm")
+    end
+    if not isWhole(Config.mailExpireDays or -1, -1) then
+        bad("Config.mailExpireDays must be -1 (core default), 0 (never) or a number of days, is "..show(Config.mailExpireDays))
+    end
+    if not isWhole(Config.mailItemLogRetentionDays or -1, -1) then
+        bad("Config.mailItemLogRetentionDays must be -1 (as long as the mails), 0 (never) or a number of days, is "
+            ..show(Config.mailItemLogRetentionDays))
     end
     if not isWhole(cc_emptySlotFiller, 0) then
         bad("Config.emptySlotFiller must be 0 or an item id, is "..show(Config.emptySlotFiller))
@@ -711,7 +729,13 @@ local function cc_execConfigCommand(chatHandler)
     for _, key in ipairs(cc_sortedKeys(Config)) do
         local value = Config[key]
         if type(value) ~= "table" then
-            chatHandler:SendSysMessage("  "..tostring(key).." = "..cc_formatDisplayValue(value))
+            local note = ""
+            if key == "mailItemLogRetentionDays" and cc_mailLogRetentionSetting < 0 then
+                -- -1 follows the mails: say what that is
+                note = cc_mailLogRetentionDays > 0 and " (as long as the mails: "..cc_mailLogRetentionDays.." days)"
+                    or " (as long as the mails: never deleted)"
+            end
+            chatHandler:SendSysMessage("  "..tostring(key).." = "..cc_formatDisplayValue(value)..note)
         end
     end
 
@@ -3211,7 +3235,7 @@ local function cc_OnPlayerLogout(event, player)
 end
 
 -- function to be called when the command hook fires
--- automatic cleanup of old mailed-items log rows (Config.mailItemLogRetentionDays, 0 = never)
+-- automatic cleanup of old mailed-items log rows (Config.mailItemLogRetentionDays: -1 = as long as the mails, 0 = never)
 if cc_enableMailItemLog and cc_mailLogRetentionDays > 0 then
     local function cc_autoCleanup()
         local count = cc_cleanupMailLog(cc_mailLogRetentionDays)

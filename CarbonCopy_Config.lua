@@ -31,9 +31,10 @@ Config.enableAdminLogs = true
 -- .carboncopy restore / revoke (true = yes | false = no). Players don't notice anything.
 Config.enableMailItemLog = true
 
--- Delete mailed-item log entries automatically once they are this many days old
--- (checked at startup and once a day). 0 = never. GMs can also run .carboncopy cleanup $days.
-Config.mailItemLogRetentionDays = 0
+-- Delete mailed-item log entries automatically once they are this many days old (checked at startup and once a day).
+-- -1 = as long as the mails stay (Config.mailExpireDays: its -1 is the core's 30 days, its 0 is never),
+-- 0 = never, 1 = 1 day, ... GMs can also run .carboncopy cleanup $days.
+Config.mailItemLogRetentionDays = -1
 
 ----------------------------------------------------------------------------------------------------
 -- Permissions
@@ -105,14 +106,14 @@ Config.makeCopySoulbounded = true
 
 -- Reset the new character's talents on both specs at its first login, so the player spends them again.
 -- Glyphs are kept. (true = yes | false = no)
-Config.resetTalentsAfterCopy = false
+Config.resetTalentsAfterCopy = true
 
 -- Where the new character starts: true = its faction's capital (capitalPositions), false = where it was created.
-Config.teleportToCapital = false
+Config.teleportToCapital = true
 
 -- Hearthstone bind point: true = its faction's capital (capitalPositions), false = copied from the source character.
 -- If the copied bind point isn't valid (none, not on a continent, all zero) the faction's capital is used instead.
-Config.homebindToCapital = false
+Config.homebindToCapital = true
 
 -- Which races use which capital. Races in neither list (e.g. custom races) use the neutral position.
 Config.allianceRaces = { 1, 3, 4, 7, 11 }   -- Human, Dwarf, Night Elf, Gnome, Draenei
@@ -137,8 +138,8 @@ Config.mailExpireDays = -1
 Config.mailSignature = "the team of ChromieCraft!"
 
 -- Item sent in place of empty equipment slots and missing Shaman totems, so every mail is full.
--- 38 = Recruit's Shirt. 0 = send only the real items.
-Config.emptySlotFiller = 38
+-- 0 = send only the real items. 38 = Recruit's Shirt (what the original script sent).
+Config.emptySlotFiller = 0
 
 ----------------------------------------------------------------------------------------------------
 -- Timing

@@ -40,16 +40,16 @@ If a copy fails before anything was mailed, the tickets are refunded and the new
 - Completed quests and reputation.
 - The action bars.
 - The level achievements (level 10, 20, ... 80) the source character has.
-- The Hearthstone bind point. If it isn't valid, or `homebindToCapital = true`, the faction's capital is used.
+- The Hearthstone bind point, only with `homebindToCapital = false` (by default the new character is bound to its faction's capital). If the copied one isn't valid, the capital is used.
 - Every equipped item, by mail, with enchants, gems and random suffix. With `makeCopySoulbounded = true` the copies are soulbound.
 - A Hearthstone, if the new character doesn't have one.
 - Hunters: one pet with its spells - the active pet first, otherwise a dismissed or stabled one.
 - Shamans: the totems the source character owns, in their own mail.
 - Equipment Manager sets, when `copyEquipmentSets = true` (only gear that was equipped).
 
-Optionally:
-- the new character starts in its faction's capital (`teleportToCapital = true`)
-- its talents are reset at first login so the player spends them again (`resetTalentsAfterCopy = true`, glyphs are kept).
+By default (each can be turned off):
+- the new character starts in its faction's capital (`teleportToCapital`) and is bound there (`homebindToCapital`)
+- its talents are reset at first login so the player spends them again (`resetTalentsAfterCopy`, glyphs are kept).
 
 ## What it does not copy
 
@@ -91,7 +91,7 @@ Wherever a command takes `$characterName`, you can also write `--character $char
 
 ### Restore and revoke
 
-Every item a copy mails is logged with its enchants, gems and suffix (`enableMailItemLog`). The mails stay `mailExpireDays` (default: the core's 30 days, `0` = never). Expired copy mail is deleted, not returned.
+Every item a copy mails is logged with its enchants, gems and suffix (`enableMailItemLog`). The mails stay `mailExpireDays` (default: the core's 30 days, `0` = never). Expired copy mail is deleted, not returned. The log is kept `mailItemLogRetentionDays`: by default as long as the mails stay, so restore / revoke work until the mail expires.
 
 - `.carboncopy restore $characterName` - list the logged items and where each one is now (mailbox, bags, bank, missing).
 - `.carboncopy restore $characterName missing [copyId] [--kick] [--clear]` - re-send only the items that no longer exist.
@@ -99,7 +99,7 @@ Every item a copy mails is logged with its enchants, gems and suffix (`enableMai
 - `.carboncopy revoke $characterName` - preview what a revoke would take back.
 - `.carboncopy revoke $characterName all [copyId] [--kick] [--clear]` - take back every logged item still unclaimed in the mailbox.
 - `.carboncopy revoke $characterName #logId [--kick] [--clear]` - take back one item (`#logId` from the list).
-- `.carboncopy cleanup $days` - delete mail log entries that are `$days` days old or older. `mailItemLogRetentionDays` does it automatically.
+- `.carboncopy cleanup $days` - delete mail log entries that are `$days` days old or older. `mailItemLogRetentionDays` does it automatically (at startup and once a day).
 
 Options:
 - `--kick`: the character must be offline. `--kick` kicks it, waits until it is saved, then runs.
@@ -119,7 +119,7 @@ The admin log table records GM and console actions with codes `3` add, `4` remov
 
 ## Configuration
 
-Everything is in `CarbonCopy_Config.lua`, with a comment on each setting. The defaults behave like the original script.
+Everything is in `CarbonCopy_Config.lua`, with a comment on each setting. Unlike the original script, by default the new character's talents are reset, it starts and is bound in its faction's capital, and empty slots get no filler item. For the original behaviour set `resetTalentsAfterCopy`, `teleportToCapital` and `homebindToCapital` to `false` and `emptySlotFiller = 38`.
 
 When a setting is invalid, CarbonCopy refuses to load and prints every problem as `ASSERT FAILED - ERROR in CarbonCopy_Config.lua`. With `shutdownOnConfigError = true` (default) it also shuts the worldserver down after 10 seconds, with exit code 1 and the reason `mod-ale lua_scripts/Acore_CarbonCopy/CarbonCopy.lua ASSERT`.
 
@@ -129,7 +129,7 @@ When a setting is invalid, CarbonCopy refuses to load and prints every problem a
 | `customDbName` | `ac_eluna` | Database for the CarbonCopy tables. |
 | `carboncopyTableName`, `playerLogsTableName`, `adminLogsTableName`, `mailItemsTableName` | `carboncopy`, ... | Table names. |
 | `enablePlayerLogs`, `enableAdminLogs`, `enableMailItemLog` | `true` | Logging. |
-| `mailItemLogRetentionDays` | `0` | Delete mail log entries after this many days (0 = never). |
+| `mailItemLogRetentionDays` | `-1` | Delete mail log entries after this many days (-1 = as long as the mails stay, see `mailExpireDays`; 0 = never). |
 | `minGMRankForCopy` / `minGMRankForTickets` / `minGMRankForRestore` | `0` / `2` / `2` | Ranks. |
 | `ticketRealms` | `"1"` | Realm list of new balances (see Tickets). |
 | `freeTickets` | `4` | Starter tickets per account. |
@@ -140,11 +140,11 @@ When a setting is invalid, CarbonCopy refuses to load and prints every problem a
 | `keepStartingItems` | `false` | Keep the new character's own items (false = all but the Hearthstone are deleted). |
 | `copyEquipmentSets` | `false` | Copy Equipment Manager sets. |
 | `makeCopySoulbounded` | `true` | Copies and restores get the soulbound flag (false = keep the original flags). |
-| `resetTalentsAfterCopy` | `false` | Reset talents at first login. |
-| `teleportToCapital` / `homebindToCapital` | `false` | Start / bind in the faction's capital (`capitalPositions`, `allianceRaces`, `hordeRaces`). |
+| `resetTalentsAfterCopy` | `true` | Reset talents at first login. |
+| `teleportToCapital` / `homebindToCapital` | `true` | Start / bind in the faction's capital (`capitalPositions`, `allianceRaces`, `hordeRaces`). |
 | `mailExpireDays` | `-1` | Days the mails stay (-1 = core default, 0 = never). |
 | `mailSignature` | `the team of ChromieCraft!` | Signature of the mails. Their texts, in all languages, are in `CarbonCopy_Locale.lua`. |
-| `emptySlotFiller` | `38` | Item sent for empty slots so every mail is full (0 = off). |
+| `emptySlotFiller` | `0` | Item sent for empty slots so every mail is full (0 = off, 38 = Recruit's Shirt like the original script). |
 | `doneMessageDelay` | `5` | Seconds before the "copy complete" message. |
 | `pollIntervalMs` / `pollMaxAttempts` | `250` / `60` | How often and how long to wait for logouts and mail saves. |
 
