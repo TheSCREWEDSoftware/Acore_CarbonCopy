@@ -130,6 +130,7 @@ When a setting is invalid, CarbonCopy refuses to load and prints every problem a
 | `carboncopyTableName`, `playerLogsTableName`, `adminLogsTableName`, `mailItemsTableName` | `carboncopy`, ... | Table names. |
 | `enablePlayerLogs`, `enableAdminLogs`, `enableMailItemLog` | `true` | Logging. |
 | `mailItemLogRetentionDays` | `-1` | Delete mail log entries after this many days (-1 = as long as the mails stay, see `mailExpireDays`; 0 = never). |
+| `mailItemLogRetentionDaysFallback` | `0` | Used (with a warning at startup) when `mailItemLogRetentionDays` isn't valid. Same values. |
 | `minGMRankForCopy` / `minGMRankForTickets` / `minGMRankForRestore` | `0` / `2` / `2` | Ranks. |
 | `ticketRealms` | `"1"` | Realm list of new balances (see Tickets). |
 | `freeTickets` | `4` | Starter tickets per account. |

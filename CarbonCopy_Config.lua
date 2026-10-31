@@ -36,6 +36,10 @@ Config.enableMailItemLog = true
 -- 0 = never, 1 = 1 day, ... GMs can also run .carboncopy cleanup $days.
 Config.mailItemLogRetentionDays = -1
 
+-- Used instead when mailItemLogRetentionDays isn't valid (a warning is printed at startup, CarbonCopy still loads).
+-- Same values: -1 = as long as the mails stay, 0 = never, 1 = 1 day, ...
+Config.mailItemLogRetentionDaysFallback = 0
+
 ----------------------------------------------------------------------------------------------------
 -- Permissions
 ----------------------------------------------------------------------------------------------------

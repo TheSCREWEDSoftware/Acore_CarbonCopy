@@ -128,8 +128,24 @@ local CC_CONTINENTS = { 0, 1, 530, 571 }   -- maps a Hearthstone bind point may 
 local cc_mailExpireDays = tonumber(Config.mailExpireDays) or -1
 -- days the core keeps mail when CarbonCopy doesn't set an expiry (Config.mailExpireDays = -1)
 local CC_CORE_MAIL_EXPIRE_DAYS = 30
--- Config.mailItemLogRetentionDays: -1 = as long as the mails stay, 0 = never, N = N days
-local cc_mailLogRetentionSetting = math.floor(tonumber(Config.mailItemLogRetentionDays) or -1)
+-- Config.mailItemLogRetentionDays: -1 = as long as the mails stay, 0 = never, N = N days. Not valid: a warning, and
+-- Config.mailItemLogRetentionDaysFallback (same values) is used instead.
+local function cc_validRetention(value)
+    return type(value) == "number" and value == math.floor(value) and value >= -1
+end
+local cc_mailLogRetentionSetting = Config.mailItemLogRetentionDays
+if cc_mailLogRetentionSetting == nil then
+    cc_mailLogRetentionSetting = -1   -- not in the config file: the default
+end
+if not cc_validRetention(cc_mailLogRetentionSetting) then
+    local fallback = Config.mailItemLogRetentionDaysFallback
+    if fallback == nil then
+        fallback = 0
+    end
+    PrintError("CarbonCopy: Config.mailItemLogRetentionDays must be -1 (as long as the mails), 0 (never) or a number of days, is "
+        ..tostring(Config.mailItemLogRetentionDays).." - using Config.mailItemLogRetentionDaysFallback ("..tostring(fallback)..") instead.")
+    cc_mailLogRetentionSetting = cc_validRetention(fallback) and fallback or 0   -- an invalid fallback is reported at load
+end
 local cc_mailLogRetentionDays = cc_mailLogRetentionSetting
 if cc_mailLogRetentionSetting < 0 then
     if cc_mailExpireDays < 0 then
@@ -289,9 +305,10 @@ do
     if not isWhole(Config.mailExpireDays or -1, -1) then
         bad("Config.mailExpireDays must be -1 (core default), 0 (never) or a number of days, is "..show(Config.mailExpireDays))
     end
-    if not isWhole(Config.mailItemLogRetentionDays or -1, -1) then
-        bad("Config.mailItemLogRetentionDays must be -1 (as long as the mails), 0 (never) or a number of days, is "
-            ..show(Config.mailItemLogRetentionDays))
+    -- an invalid mailItemLogRetentionDays only warns (its fallback is used); the fallback itself must be valid
+    if Config.mailItemLogRetentionDaysFallback ~= nil and not isWhole(Config.mailItemLogRetentionDaysFallback, -1) then
+        bad("Config.mailItemLogRetentionDaysFallback must be -1 (as long as the mails), 0 (never) or a number of days, is "
+            ..show(Config.mailItemLogRetentionDaysFallback))
     end
     if not isWhole(cc_emptySlotFiller, 0) then
         bad("Config.emptySlotFiller must be 0 or an item id, is "..show(Config.emptySlotFiller))
@@ -730,10 +747,10 @@ local function cc_execConfigCommand(chatHandler)
         local value = Config[key]
         if type(value) ~= "table" then
             local note = ""
-            if key == "mailItemLogRetentionDays" and cc_mailLogRetentionSetting < 0 then
-                -- -1 follows the mails: say what that is
-                note = cc_mailLogRetentionDays > 0 and " (as long as the mails: "..cc_mailLogRetentionDays.." days)"
-                    or " (as long as the mails: never deleted)"
+            if key == "mailItemLogRetentionDays" then
+                -- what is in effect (-1 follows the mails; an invalid value uses the fallback)
+                note = " (in effect: "..(cc_mailLogRetentionDays > 0 and cc_mailLogRetentionDays.." days" or "never deleted")
+                    ..(cc_validRetention(value) and "" or ", from the fallback")..")"
             end
             chatHandler:SendSysMessage("  "..tostring(key).." = "..cc_formatDisplayValue(value)..note)
         end
