@@ -136,7 +136,7 @@ Config.capitalPositions = {
 
 -- Days the copy / restore mails stay in the mailbox. -1 = core default (30 days), 0 = never (until 2038).
 -- Expired GM mail is deleted together with its items, it is never returned.
-Config.mailExpireDays = -1
+Config.mailExpireDays = 0
 
 -- Signature at the end of the copy / restore mails. The mail texts (all languages) are in CarbonCopy_Locale.lua.
 Config.mailSignature = "the team of ChromieCraft!"

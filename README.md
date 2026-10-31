@@ -91,7 +91,7 @@ Wherever a command takes `$characterName`, you can also write `--character $char
 
 ### Restore and revoke
 
-Every item a copy mails is logged with its enchants, gems and suffix (`enableMailItemLog`). The mails stay `mailExpireDays` (default: the core's 30 days, `0` = never). Expired copy mail is deleted, not returned. The log is kept `mailItemLogRetentionDays`: by default as long as the mails stay, so restore / revoke work until the mail expires.
+Every item a copy mails is logged with its enchants, gems and suffix (`enableMailItemLog`). The mails stay `mailExpireDays` days (default `0`: they never expire, technically until 2038; `-1` = the core's 30 days). Expired copy mail is deleted, not returned. The log is kept `mailItemLogRetentionDays`: by default as long as the mails stay (so, by default, forever), and restore / revoke work as long as the log entry exists.
 
 - `.carboncopy restore $characterName` - list the logged items and where each one is now (mailbox, bags, bank, missing).
 - `.carboncopy restore $characterName missing [copyId] [--kick] [--clear]` - re-send only the items that no longer exist.
@@ -143,7 +143,7 @@ When a setting is invalid, CarbonCopy refuses to load and prints every problem a
 | `makeCopySoulbounded` | `true` | Copies and restores get the soulbound flag (false = keep the original flags). |
 | `resetTalentsAfterCopy` | `true` | Reset talents at first login. |
 | `teleportToCapital` / `homebindToCapital` | `true` | Start / bind in the faction's capital (`capitalPositions`, `allianceRaces`, `hordeRaces`). |
-| `mailExpireDays` | `-1` | Days the mails stay (-1 = core default, 0 = never). |
+| `mailExpireDays` | `0` | Days the mails stay (0 = never expire, until 2038; -1 = the core's 30 days). |
 | `mailSignature` | `the team of ChromieCraft!` | Signature of the mails. Their texts, in all languages, are in `CarbonCopy_Locale.lua`. |
 | `emptySlotFiller` | `0` | Item sent for empty slots so every mail is full (0 = off, 38 = Recruit's Shirt like the original script). |
 | `doneMessageDelay` | `5` | Seconds before the "copy complete" message. |
